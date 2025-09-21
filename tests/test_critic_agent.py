@@ -20,9 +20,18 @@ skip_reason_ollama = "Set OLLAMA_MODEL (e opcional OLLAMA_HOST) para rodar este 
 def tmp_prompts(tmp_path_factory):
     d = tmp_path_factory.mktemp("prompts")
     (d / "critic_agent.md").write_text(
-        'You are a meticulous reviewer.\n'
-        'Return only JSON: {{"score": <0..10>, "rubric_scores": {{"A": <0..10>}}, "reasons": ["..."]}}\n\n'
-        'RUBRIC:\n{rubric_json}\n\nTEXT:\n{text}\n',
+        '# Content Evaluation\n\n'
+        'You are a meticulous reviewer. Evaluate the TEXT below using the provided RUBRIC criteria.\n\n'
+        '**IMPORTANT**: Respond in simple markdown format, NOT JSON. Use this exact structure:\n\n'
+        '## Overall Score\n\n'
+        '[0-10 number]\n\n'
+        '## Detailed Scores\n\n'
+        '- [Criterion 1]: [0-10 score]\n\n'
+        '## Reasons\n\n'
+        '- [Brief reason 1]\n\n'
+        '**Evaluation Criteria:**\n{rubric_text}\n\n'
+        '**Text to Evaluate:**\n{text}\n\n'
+        'Please be thorough but concise in your evaluation.',
         encoding="utf-8"
     )
     os.environ["PROMPT_DIR"] = str(d)
@@ -31,13 +40,13 @@ def tmp_prompts(tmp_path_factory):
 
 # --- dummies de LLM para o crítico ---
 def critic_llm_low(prompt: str, **kwargs) -> str:
-    return json.dumps({"score": 4.0, "rubric_scores": {"A": 4.0}, "reasons": ["too short"]})
+    return "## Overall Score\n\n4.0\n\n## Detailed Scores\n\n- A: 4.0\n\n## Reasons\n\n- Too short"
 
 def critic_llm_high(prompt: str, **kwargs) -> str:
-    return json.dumps({"score": 9.0, "rubric_scores": {"A": 9.0}, "reasons": ["good"]})
+    return "## Overall Score\n\n9.0\n\n## Detailed Scores\n\n- A: 9.0\n\n## Reasons\n\n- Good content"
 
-def critic_llm_invalid_json(prompt: str, **kwargs) -> str:
-    return "NOT_JSON << " + prompt[:30]
+def critic_llm_invalid_markdown(prompt: str, **kwargs) -> str:
+    return "INVALID_MARKDOWN_FORMAT << " + prompt[:30]
 
 
 # --- dummy writer (usa LLMAgent com LLM simples) ---
@@ -83,13 +92,13 @@ def test_critic_goto_on_pass(tmp_prompts):
     assert res.output["score"] >= 7.5
 
 
-def test_critic_invalid_json_triggers_repeat(tmp_prompts):
+def test_critic_invalid_markdown_triggers_repeat(tmp_prompts):
     critic = CriticAgent(AgentConfig(
         name="Critic",
         model_config={
             "rubric": ["A"], "threshold": 7.5, "max_iters": 1, "prompt_file": "critic_agent.md"
         }
-    ), llm_fn=critic_llm_invalid_json)
+    ), llm_fn=critic_llm_invalid_markdown)
 
     msg = Message(data={"text": "anything"}, meta={"iteration": 0})
     res = critic.execute(msg)

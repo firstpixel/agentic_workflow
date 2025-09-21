@@ -1,3 +1,4 @@
+import os
 from src.core.workflow_manager import WorkflowManager
 from src.core.agent import AgentConfig
 from src.agents.echo import EchoAgent
@@ -28,35 +29,101 @@ from src.agents.critic_agent import CriticAgent
 
 # Um agente de eco simples para visualizar para onde roteamos
 from src.agents.echo import EchoAgent  # use o echo do exemplo do Task 1 (ou crie agora)
+from src.agents.fanout_agent import FanOutAgent
+from src.agents.join_agent import JoinAgent
 
 
-def create_ollama_llm_fn(model: str = "llama3.2:latest"):
-    """Create an Ollama LLM function for use with agents."""
-    def ollama_llm(prompt: str, **kwargs) -> str:
-        try:
-            import ollama
-            
-            # Override model if specified in kwargs
-            model_to_use = kwargs.get("model", model)
-            
-            # Create the chat messages
-            messages = [{"role": "user", "content": prompt}]
-            
-            # Call Ollama
-            response = ollama.chat(
-                model=model_to_use,
-                messages=messages,
-                stream=False
-            )
-            
-            return response["message"]["content"]
-            
-        except ImportError:
-            return f"[OLLAMA NOT AVAILABLE] {prompt[:120]}"
-        except Exception as e:
-            return f"[OLLAMA ERROR: {str(e)}] {prompt[:120]}"
+def demo_parallelization():
+    """
+    FanOut -> (TechWriter, BizWriter) -> Join -> Final
+    Usa LLMAgent com Ollama e prompts .md (sem mock).
+    """
+    # Set the prompts directory to our actual prompts folder
+    os.environ["PROMPT_DIR"] = "/Users/gilbeyruth/AIProjects/agentic_workflow/prompts"
     
-    return ollama_llm
+    # Config básico do modelo Ollama - use a more capable model
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
+    model_cfg = {"model": model, "options": {"temperature": 0.1}}
+
+    # Agentes de ramo (cada um com seu prompt .md)
+    tech_writer = LLMAgent(AgentConfig(name="TechWriter", prompt_file="tech_writer.md", model_config=model_cfg))
+    biz_writer  = LLMAgent(AgentConfig(name="BizWriter",  prompt_file="biz_writer.md",  model_config=model_cfg))
+
+    # FanOut (define os ramos)
+    fanout = FanOutAgent(AgentConfig(
+        name="FanOut",
+        model_config={"branches": ["TechWriter", "BizWriter"]}
+    ))
+
+    # Join (agrega)
+    join = JoinAgent(AgentConfig(name="Join"))
+
+    # Sumarizador final (usa o texto joined como {message_text})
+    final = LLMAgent(AgentConfig(name="FinalSummary", prompt_file="final_summarizer.md", model_config=model_cfg))
+
+    agents = {
+        "FanOut": fanout,
+        "TechWriter": tech_writer,
+        "BizWriter": biz_writer,
+        "Join": join,
+        "FinalSummary": final
+    }
+
+    graph = {
+        "FanOut": ["TechWriter", "BizWriter"],
+        "TechWriter": ["Join"],
+        "BizWriter":  ["Join"],
+        "Join": ["FinalSummary"],
+        "FinalSummary": []
+    }
+
+    wm = WorkflowManager(graph, agents)
+
+    user_input = {
+        "text": "We plan to add a new analytics feature tracking user journeys across the mobile app and web."
+    }
+    results = wm.run_workflow("FanOut", user_input)
+
+    print("\n=== TASK 4: Parallelization Sample ===")
+    for r in results:
+        print("->", r.display_output or r.output)
+
+def create_ollama_llm_agent(model: str = "llama3.2:latest") -> 'LLMAgent':
+    """Create LLMAgent that uses real Ollama (no custom llm_fn, uses default)"""
+    config = AgentConfig(
+        name="OllamaLLM",
+        model_config={
+            "model": model,
+            "options": {"temperature": 0.1}
+        }
+    )
+    # Don't pass llm_fn - let it use the default Ollama integration
+    return LLMAgent(config)
+
+
+def check_ollama_availability(model: str = "llama3.2:latest", timeout: int = 5) -> bool:
+    """Check if Ollama is available and the model is accessible."""
+    try:
+        import ollama
+        import httpx
+        
+        client = ollama.Client(timeout=timeout)
+        # Try a simple test with the model
+        response = client.chat(
+            model=model,
+            messages=[{"role": "user", "content": "test"}],
+            stream=False
+        )
+        return True
+    except ImportError:
+        print("❌ Ollama library not available")
+        return False
+    except (httpx.TimeoutException, httpx.ConnectTimeout, httpx.ReadTimeout):
+        print(f"⏰ Ollama server timeout after {timeout}s - server may not be running")
+        return False
+    except Exception as e:
+        print(f"❌ Ollama error: {str(e)}")
+        return False
 
 
 def main():
@@ -67,6 +134,9 @@ def main():
     
     # Run CriticAgent evaluation examples  
     demo_critic_agent_evaluation()
+    
+    
+    demo_parallelization()
 
 
 def demo_switch_agent_routing():
@@ -75,8 +145,19 @@ def demo_switch_agent_routing():
     print("🔀 SWITCH AGENT ROUTING DEMO")
     print("=" * 60)
     
-    # Create Ollama LLM function
-    ollama_llm = create_ollama_llm_fn("llama3.2:latest")
+    # Use more capable model for complex JSON tasks
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
+    
+    print(f"🔍 Checking Ollama availability with model: {model}")
+    if not check_ollama_availability(model):
+        print("⚠️  Skipping Switch Agent demo - Ollama not available or model not found")
+        print("   Set OLLAMA_MODEL environment variable or ensure Ollama is running")
+        return
+    
+    print("✅ Ollama is available, proceeding with demo...")
+    
+    # Create LLMAgent with Ollama integration
+    llm_agent = create_ollama_llm_agent(model)
     
     # --- Defina rotas do SwitchAgent ---
     routes_cfg = {
@@ -88,11 +169,11 @@ def demo_switch_agent_routing():
         "default": "Support",
         "mode": "hybrid",                 # "llm" | "keywords" | "hybrid"
         "confidence_threshold": 0.4,     # Lowered to accept more LLM decisions
-        "model": "llama3.2:latest"        # Add model specification
+        "model": model                    # Use the same model as availability check
     }
 
     agents = {
-        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg), llm_fn=ollama_llm),
+        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg), llm_fn=llm_agent.llm_fn),
         "Billing": EchoAgent(AgentConfig(name="Billing")),
         "Support": EchoAgent(AgentConfig(name="Support")),
         "Sales":   EchoAgent(AgentConfig(name="Sales")),
@@ -134,40 +215,30 @@ def demo_critic_agent_evaluation():
     print("🧪 CRITIC AGENT EVALUATION DEMO")
     print("=" * 60)
     
-    # Create Ollama LLM function
-    ollama_llm = create_ollama_llm_fn("llama3.2:latest")
+    # Use more capable model for complex JSON tasks
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
     
-    # Create a simple prompt file in memory (for demo purposes)
-    import tempfile
-    import os
+    print(f"🔍 Checking Ollama availability with model: {model}")
+    if not check_ollama_availability(model):
+        print("⚠️  Skipping Critic Agent demo - Ollama not available or model not found")
+        print("   Set OLLAMA_MODEL environment variable or ensure Ollama is running")
+        return
     
-    # Setup temporary prompt directory
-    tmp_dir = tempfile.mkdtemp()
-    prompt_file = f'{tmp_dir}/critic_agent.md'
-    with open(prompt_file, 'w') as f:
-        f.write('''You are a meticulous content reviewer and evaluator.
-
-Evaluate the following text based on the provided rubric criteria.
-Return ONLY a JSON response with the following format:
-{{"score": <overall_score_0_to_10>, "rubric_scores": {{"criteria1": <score>, "criteria2": <score>}}, "reasons": ["reason1", "reason2"]}}
-
-EVALUATION RUBRIC:
-{rubric_json}
-
-TEXT TO EVALUATE:
-{text}
-
-Be strict but fair in your evaluation. Provide specific reasons for your scoring.''')
+    print("✅ Ollama is available, proceeding with demo...")
     
-    os.environ['PROMPT_DIR'] = tmp_dir
+    # Create LLMAgent with Ollama integration
+    llm_agent = create_ollama_llm_agent(model)
+    
+    # Use the actual prompts directory with our real critic_agent.md file
+    os.environ['PROMPT_DIR'] = "/Users/gilbeyruth/AIProjects/agentic_workflow/prompts"
     
     # Create agents for writer-critic workflow
     writer = LLMAgent(
         AgentConfig(
             name="Writer", 
-            model_config={"model": "llama3.2:latest"}
+            model_config={"model": model}
         ), 
-        llm_fn=ollama_llm
+        llm_fn=llm_agent.llm_fn
     )
     
     critic = CriticAgent(
@@ -179,10 +250,10 @@ Be strict but fair in your evaluation. Provide specific reasons for your scoring
                 "max_iters": 2,
                 "next_on_pass": "Done",
                 "prompt_file": "critic_agent.md",
-                "model": "llama3.2:latest"
+                "model": model
             }
         ),
-        llm_fn=ollama_llm
+        llm_fn=llm_agent.llm_fn
     )
     
     # Simple "Done" agent 
@@ -226,13 +297,6 @@ Be strict but fair in your evaluation. Provide specific reasons for your scoring
             
     except Exception as e:
         print(f"\n❌ Error in critic workflow: {e}")
-    
-    # Cleanup
-    try:
-        os.remove(prompt_file)
-        os.rmdir(tmp_dir)
-    except:
-        pass
 
 
 if __name__ == "__main__":

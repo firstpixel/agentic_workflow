@@ -37,56 +37,59 @@ def _score_keywords(text: str, keywords: List[str]) -> int:
     return score
 
 
-def _safe_json_parse(s: str) -> Optional[Dict[str, Any]]:
+def _parse_markdown_response(response: str) -> Optional[Dict[str, Any]]:
     """
-    Tenta parsear JSON de forma resiliente. Se falhar, tenta extrair um bloco {...}.
-    Também tenta converter single quotes para double quotes para JSON válido.
+    Parse markdown-formatted response from LLM instead of JSON.
+    Expected format:
+    ## Route: [route_name]
+    ## Confidence: [0.0-1.0]
+    ## Reasons: [explanation]
     """
-    s = s.strip()
+    if not response:
+        return None
     
-    # Tentativa 1: JSON direto
-    try:
-        return json.loads(s)
-    except Exception:
-        pass
+    result = {}
     
-    # Tentativa 2: Extrair bloco JSON
-    m = re.search(r"\{.*\}", s, flags=re.DOTALL)
-    if m:
-        json_block = m.group(0)
-        
-        # Tentativa 2a: JSON direto do bloco
+    # Extract route
+    route_match = re.search(r"##\s*Route\s*[:：]\s*(.+)", response, re.IGNORECASE)
+    if route_match:
+        result["route"] = route_match.group(1).strip()
+    
+    # Extract confidence
+    conf_match = re.search(r"##\s*Confidence\s*[:：]\s*([\d.]+)", response, re.IGNORECASE)
+    if conf_match:
         try:
-            return json.loads(json_block)
-        except Exception:
-            pass
-        
-        # Tentativa 2b: Converter single quotes para double quotes
-        try:
-            # Substitui single quotes por double quotes, mas cuidado com aspas dentro de strings
-            fixed_json = json_block.replace("'", '"')
-            return json.loads(fixed_json)
-        except Exception:
-            pass
+            result["confidence"] = float(conf_match.group(1))
+        except ValueError:
+            result["confidence"] = 0.0
+    else:
+        result["confidence"] = 0.0
     
-    return None
+    # Extract reasons
+    reasons_match = re.search(r"##\s*Reasons?\s*[:：]\s*(.+?)(?=##|$)", response, re.IGNORECASE | re.DOTALL)
+    if reasons_match:
+        result["reasons"] = reasons_match.group(1).strip()
+    else:
+        result["reasons"] = ""
+    
+    return result if "route" in result else None
 
 
 class SwitchAgent(BaseAgent):
     """
-    Roteador híbrido:
-    - Modo 'keywords': usa correspondência de palavras-chave por rota.
-    - Modo 'llm': pergunta a um LLM qual rota escolher (com confiança).
-    - Modo 'hybrid' (padrão): tenta LLM; se confiança < threshold, cai para 'keywords'.
+    Hybrid router:
+    - Mode 'keywords': uses keyword matching per route.
+    - Mode 'llm': asks an LLM to choose the best route (with confidence).
+    - Mode 'hybrid' (default): tries LLM first; if confidence < threshold, falls back to 'keywords'.
 
-    Configuração via AgentConfig.model_config:
+    Configuration via AgentConfig.model_config:
     {
       "mode": "hybrid" | "llm" | "keywords",
       "confidence_threshold": 0.55,
       "routes": {
-         "Billing":  { "keywords": ["boleto", "fatura"], "description": "Cobrança e pagamentos" },
-         "Support":  { "keywords": ["erro", "falha", "bug"], "description": "Suporte técnico" },
-         "Sales":    { "keywords": ["preço", "plano", "licença"], "description": "Comercial" }
+         "Billing":  { "keywords": ["bill", "invoice"], "description": "Billing and payments" },
+         "Support":  { "keywords": ["error", "failure", "bug"], "description": "Technical support" },
+         "Sales":    { "keywords": ["price", "plan", "license"], "description": "Commercial" }
       },
       "default": "Support"
     }
@@ -193,8 +196,10 @@ class SwitchAgent(BaseAgent):
 
     def _route_with_llm(self, text: str, cfg: Dict[str, Any]) -> Tuple[Optional[str], float, Dict[str, Any]]:
         """
-        Constrói um prompt de classificação e solicita ao LLM uma saída JSON:
-        { "route": "<UMA_DAS_OPCOES>", "confidence": 0.0..1.0, "reasons": "curto" }
+        Builds a classification prompt and requests an LLM markdown output:
+        ## Route: [route_name]
+        ## Confidence: [0.0-1.0]  
+        ## Reasons: [brief explanation]
         """
         options = []
         for label, spec in cfg["routes"].items():
@@ -218,10 +223,11 @@ class SwitchAgent(BaseAgent):
         try:
             llm_raw = self.llm_fn(prompt, **self.config.model_config)
         except Exception as e:
-            # se LLM indisponível, retorna None para cair no fallback
+            # if LLM unavailable, return None to fall back
             return None, 0.0, {"llm_error": str(e)}
 
-        parsed = _safe_json_parse(llm_raw or "")
+        # Parse markdown format
+        parsed = _parse_markdown_response(llm_raw or "")
         if not parsed or "route" not in parsed:
             return None, 0.0, {"llm_raw": llm_raw, "parse": "failed"}
 

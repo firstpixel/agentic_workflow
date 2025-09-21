@@ -11,20 +11,29 @@ from .agent import BaseAgent
 class NodeState:
     expected_inputs: int = 1
     received: List[Message] = field(default_factory=list)
-    last_producer: Optional[str] = None  # para repeat loops
+    last_producer: Optional[str] = None
 
 
 class WorkflowManager:
-    """
-    - Grafo simples: node -> [next_nodes]
-    - Respeita control flags: goto, repeat, halt
-    - Mantém 'root' (input original) e 'iteration' para reflexão
-    """
     def __init__(self, graph: Dict[str, List[str]], agents: Dict[str, BaseAgent]):
         self.graph = graph
         self.agents = agents
         self.state: Dict[str, NodeState] = defaultdict(NodeState)
         self.run_overrides: Dict[str, Dict[str, Any]] = defaultdict(dict)
+        self.in_degree: Dict[str, int] = self._compute_in_degree(graph)
+
+    @staticmethod
+    def _compute_in_degree(graph: Dict[str, List[str]]) -> Dict[str, int]:
+        indeg: Dict[str, int] = defaultdict(int)
+        nodes = set(graph.keys())
+        for src, targets in graph.items():
+            nodes.update(targets)
+            for t in targets:
+                indeg[t] += 1
+        # nós de entrada podem não aparecer como targets
+        for n in nodes:
+            indeg.setdefault(n, 0)
+        return dict(indeg)
 
     def _enqueue(self, q: Deque[Tuple[str, Message]], node: str, msg: Message):
         q.append((node, msg))
@@ -42,7 +51,6 @@ class WorkflowManager:
         self.state.clear()
         self.run_overrides.clear()
 
-        # Raiz disponível a todos
         self._enqueue(q, entry, Message(data=input_data, meta={"root": input_data, "iteration": 0}))
 
         while q:
@@ -51,7 +59,6 @@ class WorkflowManager:
             if not agent:
                 raise WorkflowError(f"Agent '{node}' not found")
 
-            # JOIN (aguarda N entradas se necessário)
             ns = self.state[node]
             ns.expected_inputs = max(ns.expected_inputs, int(msg.meta.get("expected_inputs", 1)))
             ns.received.append(msg)
@@ -61,12 +68,10 @@ class WorkflowManager:
             payload = self._merge_messages(ns.received)
             ns.received.clear()
 
-            # Executa agente
             res = agent.execute(payload)
             results.append(res)
             ns.last_producer = payload.meta.get("last_producer")
 
-            # Guarda overrides (prompts/model_config futuros)
             self._apply_overrides(node, res)
 
             ctrl = res.control or {}
@@ -75,20 +80,16 @@ class WorkflowManager:
 
             next_nodes = self._next_nodes(node)
 
-            # ---------- repeat: reexecuta o PRODUTOR anterior ----------
             if ctrl.get("repeat"):
                 prev = ns.last_producer or node
                 root_obj = payload.meta.get("root")
                 iteration = int(payload.meta.get("iteration", 0)) + 1
-
-                # A saída que o crítico inspecionou está em 'payload.data'
-                # Passamos como 'previous' para o produtor refazer
                 repeat_msg = Message(
                     data={"input": root_obj, "previous": payload.data},
                     meta={
                         "last_producer": prev,
                         "root": root_obj,
-                        "critic_feedback": res.output,  # feedback estruturado do crítico
+                        "critic_feedback": res.output,
                         "critic": node,
                         "iteration": iteration
                     }
@@ -96,22 +97,28 @@ class WorkflowManager:
                 self._enqueue(q, prev, repeat_msg)
                 continue
 
-            # ---------- goto: pula para um destino específico ----------
             if ctrl.get("goto"):
                 next_nodes = [ctrl["goto"]]
 
-            # ---------- fluxo normal ----------
             root_obj = payload.meta.get("root")
             for nxt in next_nodes:
+                # ---- payload por ramo (FanOutAgent) ----
+                per_branch_data = res.output.get(nxt) if isinstance(res.output, dict) else None
+                data_to_send = per_branch_data if per_branch_data is not None else res.output
+
+                # ---- in_degree -> expected_inputs para o nó de destino ----
+                exp = max(1, int(self.in_degree.get(nxt, 1)))
+
                 self._enqueue(
                     q,
                     nxt,
                     Message(
-                        data=res.output,
+                        data=data_to_send,
                         meta={
                             "last_producer": node,
                             "root": root_obj,
-                            "iteration": payload.meta.get("iteration", 0)
+                            "iteration": payload.meta.get("iteration", 0),
+                            "expected_inputs": exp
                         }
                     )
                 )

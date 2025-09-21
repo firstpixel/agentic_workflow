@@ -23,14 +23,14 @@ def _extract_text(payload: Any) -> str:
 
 class CriticAgent(BaseAgent):
     """
-    Avaliador com prompt .md (em /prompts).
+    Evaluator with .md prompt (in /prompts).
     Config (model_config):
     {
-      "rubric": ["Clareza e estrutura", "Aderência ao pedido", "Corretude técnica"],
+      "rubric": ["Clarity and structure", "Adherence to request", "Technical correctness"],
       "threshold": 7.5,        # 0..10
-      "max_iters": 2,          # limite de revisões
-      "next_on_pass": "Done",  # (opcional) goto quando passar
-      "prompt_file": "critic_agent.md"  # (opcional) default = critic_agent.md
+      "max_iters": 2,          # review limit
+      "next_on_pass": "Done",  # (optional) goto when passing
+      "prompt_file": "critic_agent.md"  # (optional) default = critic_agent.md
     }
     """
     def __init__(self, config: AgentConfig, llm_fn: LLMCallable):
@@ -42,22 +42,29 @@ class CriticAgent(BaseAgent):
         text = _extract_text(message.data)
         iteration = int(message.meta.get("iteration", 0))
 
-        # Monta prompt a partir do arquivo .md
+        # Build prompt from .md file
         prompt_tmpl = load_prompt_text(cfg["prompt_file"])
         if not prompt_tmpl:
             raise FileNotFoundError(f"CriticAgent prompt not found: {cfg['prompt_file']}")
 
+        rubric_text = "\n".join(f"- {criterion}" for criterion in cfg["rubric"])
         prompt = prompt_tmpl.format_map(SafeDict({
-            "rubric_json": json.dumps(cfg["rubric"], ensure_ascii=False),
+            "rubric_text": rubric_text,
             "text": text
         }))
 
+        print(f"🔍 DEBUG: CriticAgent evaluating iteration {iteration}")
+        print(f"📝 Text to evaluate: {text[:200]}...")
+        
         llm_raw = self.llm_fn(prompt, **(self.config.model_config or {}))
+        
+        print(f"🤖 LLM Response: {llm_raw[:300]}...")
 
-        # Parse JSON estrito, com fallback para bloco {...}
-        obj = self._parse_json(llm_raw)
-        if obj is None or "score" not in obj or "rubric_scores" not in obj:
-            # Se o LLM não respeitar o formato, trata como reprovação leve e pede repeat
+        # Parse markdown format instead of JSON
+        parsed_result = self._parse_markdown_response(llm_raw, cfg["rubric"])
+        
+        if parsed_result is None:
+            # If LLM doesn't follow format, treat as mild failure and request repeat
             feedback = {
                 "score": 0.0,
                 "passed": False,
@@ -65,20 +72,19 @@ class CriticAgent(BaseAgent):
                 "mode_used": "llm",
                 "rubric": cfg["rubric"],
                 "rubric_scores": {},
-                "reasons": ["Invalid JSON from evaluator"],
+                "reasons": ["Invalid response format from evaluator"],
                 "raw": llm_raw[:5000]
             }
-            disp = f"🧪 Critic: invalid-json -> request repeat (iter={iteration})"
+            disp = f"🧪 Critic: invalid-format -> request repeat (iter={iteration})"
+            print(f"❌ DEBUG: Invalid response format")
             if iteration >= cfg["max_iters"]:
-                # sem loop infinito
+                # no infinite loop
                 return Result.ok(output=feedback, display_output=disp + " | max_iters", control={})
             return Result.ok(output=feedback, display_output=disp, control={"repeat": True})
 
-        score = float(obj.get("score", 0.0))
-        rubric_scores = obj.get("rubric_scores", {}) or {}
-        reasons = obj.get("reasons", [])
-        if not isinstance(reasons, list):
-            reasons = [str(reasons)]
+        score = parsed_result["score"]
+        rubric_scores = parsed_result["rubric_scores"]
+        reasons = parsed_result["reasons"]
 
         passed = score >= cfg["threshold"]
         feedback = {
@@ -91,6 +97,8 @@ class CriticAgent(BaseAgent):
             "reasons": reasons
         }
         disp = f"🧪 Critic: score={score:.2f} pass={passed} iter={iteration}"
+        
+        print(f"✅ DEBUG: Evaluation complete - Score: {score}, Passed: {passed}")
 
         if passed:
             ctrl = {}
@@ -106,7 +114,7 @@ class CriticAgent(BaseAgent):
     # ----------------- helpers -----------------
     def _read_cfg(self) -> Dict[str, Any]:
         mc = self.config.model_config or {}
-        rubric = mc.get("rubric") or ["Clareza e estrutura", "Aderência ao pedido", "Corretude técnica"]
+        rubric = mc.get("rubric") or ["Clarity and structure", "Adherence to request", "Technical correctness"]
         thr = float(mc.get("threshold", 7.5))
         max_iters = int(mc.get("max_iters", 2))
         next_on_pass = mc.get("next_on_pass")
@@ -119,16 +127,84 @@ class CriticAgent(BaseAgent):
             "prompt_file": prompt_file
         }
 
-    def _parse_json(self, raw: str) -> Optional[Dict[str, Any]]:
-        raw = raw.strip()
+    def _parse_markdown_response(self, raw: str, rubric: List[str]) -> Optional[Dict[str, Any]]:
+        """Parse markdown-formatted response instead of JSON."""
         try:
-            return json.loads(raw)
-        except Exception:
-            pass
-        m = re.search(r"\{.*\}", raw, flags=re.DOTALL)
-        if not m:
-            return None
-        try:
-            return json.loads(m.group(0))
-        except Exception:
+            # Look for overall score - handle both formats: "Score: 8.5" or "## Overall Score\n8.5"
+            score_match = re.search(r'(?:Overall\s+Score|Score)[:：]?\s*(\d+(?:\.\d+)?)', raw, re.IGNORECASE)
+            if not score_match:
+                # Try multiline format: "## Overall Score" followed by number on next line(s)
+                score_match = re.search(r'##\s*Overall\s+Score\s*\n+\s*(\d+(?:\.\d+)?)', raw, re.IGNORECASE)
+            if not score_match:
+                # Try simple number after "Score" heading
+                score_match = re.search(r'(\d+(?:\.\d+)?)\s*/\s*10', raw)
+            
+            if not score_match:
+                print(f"❌ DEBUG: Could not find score in response")
+                print(f"📝 DEBUG: Response preview: {raw[:200]}...")
+                return None
+                
+            score = float(score_match.group(1))
+            print(f"✅ DEBUG: Found score: {score}")
+            
+            # Parse individual rubric scores
+            rubric_scores = {}
+            for criterion in rubric:
+                # Look for patterns like "Clarity: 8", "- Clarity: 8/10", or multiline format
+                pattern = rf'{re.escape(criterion)}[:：]?\s*(\d+(?:\.\d+)?)'
+                match = re.search(pattern, raw, re.IGNORECASE)
+                if match:
+                    rubric_scores[criterion] = float(match.group(1))
+                else:
+                    # Default to overall score if individual not found
+                    rubric_scores[criterion] = score
+            
+            # Extract reasons/feedback - handle both bullet points and multiline format
+            reasons = []
+            
+            # Try multiline format first: "## Reasons" followed by bullet points
+            reasons_section = re.search(r'##\s*Reasons?\s*\n+((?:\s*[-*•]\s*.+\n?)*)', raw, re.IGNORECASE | re.MULTILINE)
+            if reasons_section:
+                reason_text = reasons_section.group(1)
+                bullets = re.findall(r'[-*•]\s*(.+)', reason_text)
+                if bullets:
+                    reasons = [bullet.strip() for bullet in bullets]
+            
+            # If no multiline format found, try other patterns
+            if not reasons:
+                reason_patterns = [
+                    r'(?:Reasons?|Feedback)[:：]\s*\n((?:\s*[-*•]\s*.+\n?)+)',
+                    r'((?:^\s*[-*•]\s*.+$)+)',
+                    r'((?:^\s*\d+\.\s*.+$)+)'
+                ]
+                
+                for pattern in reason_patterns:
+                    match = re.search(pattern, raw, re.MULTILINE | re.IGNORECASE)
+                    if match:
+                        reason_text = match.group(1)
+                        # Extract individual bullet points
+                        bullets = re.findall(r'[-*•]\s*(.+)', reason_text)
+                        if bullets:
+                            reasons = [bullet.strip() for bullet in bullets]
+                            break
+                        # Extract numbered points
+                        numbered = re.findall(r'\d+\.\s*(.+)', reason_text)
+                        if numbered:
+                            reasons = [point.strip() for point in numbered]
+                            break
+            
+            if not reasons:
+                # Fallback: extract any meaningful text as single reason
+                lines = [line.strip() for line in raw.split('\n') if line.strip() and not re.match(r'^\d+(?:\.\d+)?', line.strip())]
+                if lines:
+                    reasons = ["Content evaluated"]
+            
+            return {
+                "score": score,
+                "rubric_scores": rubric_scores,
+                "reasons": reasons
+            }
+            
+        except Exception as e:
+            print(f"❌ DEBUG: Error parsing markdown response: {e}")
             return None
