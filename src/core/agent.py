@@ -1,9 +1,19 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, List, Callable
+from typing import Any, Dict, Optional, List, Callable, Protocol
 from time import time
+from pathlib import Path
+import os
+import json
 
-from .types import Message, Result, AgentExecutionError
+import requests  # para Ollama default
+
+from .types import Message, Result
+
+
+# --------- Protocolo do LLM ------------
+class LLMCallable(Protocol):
+    def __call__(self, prompt: str, **kwargs) -> str: ...
 
 
 @dataclass
@@ -11,25 +21,40 @@ class AgentConfig:
     name: str
     retries: int = 0
     retry_backoff_sec: float = 0.0
-    model_config: Dict[str, Any] = field(default_factory=dict)  # optional (T9)
-    prompt: Optional[str] = None                                # optional (T10)
-    tools: List[Any] = field(default_factory=list)              # optional (T5/T6)
+    model_config: Dict[str, Any] = field(default_factory=dict)
+    prompt_file: Optional[str] = None             # caminho/arquivo .md
+    tools: List[Any] = field(default_factory=list)
 
 
+# --------- Helpers de prompt ---------------
+def _prompt_dir() -> Path:
+    # Pode sobrescrever via env var PROMPT_DIR; default: ./prompts
+    return Path(os.environ.get("PROMPT_DIR", "prompts")).resolve()
+
+def load_prompt_text(file_name_or_path: Optional[str]) -> Optional[str]:
+    """Carrega texto do prompt a partir de /prompts ou de um path absoluto."""
+    if not file_name_or_path:
+        return None
+    p = Path(file_name_or_path)
+    if not p.is_absolute():
+        p = _prompt_dir() / file_name_or_path
+    if not p.exists():
+        raise FileNotFoundError(f"Prompt file not found: {p}")
+    return p.read_text(encoding="utf-8")
+
+class SafeDict(dict):
+    def __missing__(self, key):
+        return ""  # placeholders faltantes viram vazio
+
+
+# ------------- BaseAgent -------------------
 class BaseAgent:
-    """
-    Base contract for all agents. Only 'run' must be overridden.
-    'execute' wraps retries, timing and returns a standardized Result.
-    """
     def __init__(self, config: AgentConfig):
         self.config = config
 
-    # ---- Overridables -------------------------------------------------
     def run(self, message: Message) -> Result:
-        """Implement agent logic here, return Result.ok()/fail()."""
         raise NotImplementedError
 
-    # ---- Execution wrapper (retries, timing, standard result) --------
     def execute(self, message: Message) -> Result:
         start = time()
         attempt = 0
@@ -38,10 +63,8 @@ class BaseAgent:
         while attempt <= self.config.retries:
             try:
                 res = self.run(message)
-                # Ensure a Result
                 if not isinstance(res, Result):
                     res = Result.ok(output=res)
-                # Inject basic metrics
                 res.metrics.setdefault("agent", self.config.name)
                 res.metrics.setdefault("attempt", attempt + 1)
                 res.metrics.setdefault("latency_sec", time() - start)
@@ -51,49 +74,100 @@ class BaseAgent:
                 attempt += 1
                 if attempt > self.config.retries:
                     break
-        # Failed after retries
         return Result.fail(
             output={"error": str(last_err) if last_err else "Unknown error"},
             metrics={"agent": self.config.name, "attempt": attempt, "latency_sec": time() - start}
         )
 
 
-# ---------- Example LLMAgent with Ollama integration ----------
+# ------------- LLMAgent --------------------
 class LLMAgent(BaseAgent):
     """
-    LLM agent with Ollama integration; in later tasks (T5/T9/T10) we plug tools, RAG,
-    model selection and prompt overrides.
+    Usa o SEU LLM (injete via llm_fn) ou, por padrão, Ollama /api/chat.
+    Suporta:
+      - prompt_file (.md) com placeholders
+      - revisão orientada por feedback do crítico (repeat loop)
+    Placeholders:
+      {root} {previous} {critic_feedback} {iteration} {message_text}
     """
-    def __init__(self, config: AgentConfig, llm_fn: Optional[Callable[..., str]] = None):
+    def __init__(self, config: AgentConfig, llm_fn: Optional[LLMCallable] = None):
         super().__init__(config)
         self.llm_fn = llm_fn or self._default_llm
 
+    # ----------- Default: Ollama chat -----------
     def _default_llm(self, prompt: str, **kwargs) -> str:
-        """Default Ollama LLM implementation."""
-        try:
-            import ollama
-            
-            # Get model from config or use default
-            model = kwargs.get("model", "llama3.2:latest")
-            
-            # Create the chat messages
-            messages = [{"role": "user", "content": prompt}]
-            
-            # Call Ollama
-            response = ollama.chat(
-                model=model,
-                messages=messages,
-                stream=False
-            )
-            
-            return response["message"]["content"]
-            
-        except ImportError:
-            return f"[OLLAMA NOT AVAILABLE] {prompt[:120]}"
-        except Exception as e:
-            return f"[OLLAMA ERROR: {str(e)}] {prompt[:120]}"
+        """
+        Usa Ollama /api/chat (http://localhost:11434 por padrão).
+        model_config suportado:
+          - model: str (ex.: "llama3")
+          - options: dict (temperature, top_p, etc.)
+          - timeout_sec: float
+        """
+        model_config = self.config.model_config or {}
+        model = model_config.get("model", "llama3")
+        options = model_config.get("options", {})
+        timeout = float(model_config.get("timeout_sec", 120.0))
+
+        host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+        url = f"{host}/api/chat"
+
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a helpful assistant."},
+                {"role": "user", "content": prompt}
+            ],
+            "stream": False,
+        }
+        if isinstance(options, dict) and options:
+            payload["options"] = options
+
+        resp = requests.post(url, json=payload, timeout=timeout)
+        resp.raise_for_status()
+        data = resp.json()
+        # Estrutura padrão do /api/chat:
+        # { "message": {"role":"assistant","content":"..."} , ... }
+        msg = (data or {}).get("message") or {}
+        content = msg.get("content")
+        if not content:
+            # fallback para /api/generate caso o servidor esteja configurado diferente
+            gen_url = f"{host}/api/generate"
+            gen_payload = {"model": model, "prompt": prompt, "stream": False}
+            if isinstance(options, dict) and options:
+                gen_payload["options"] = options
+            r2 = requests.post(gen_url, json=gen_payload, timeout=timeout)
+            r2.raise_for_status()
+            d2 = r2.json()
+            return (d2 or {}).get("response", "") or ""
+        return content
+
+    # ---------------- utilidades ----------------
+    def _extract_message_text(self, message: Message) -> str:
+        d = message.data
+        if isinstance(d, dict):
+            for k in ("text", "prompt", "input", "query", "content"):
+                if isinstance(d.get(k), str):
+                    return d[k]
+        return str(d)
+
+    def _build_prompt(self, message: Message) -> str:
+        ctx = {
+            "root": message.meta.get("root", ""),
+            "previous": "",
+            "critic_feedback": message.meta.get("critic_feedback", ""),
+            "iteration": message.meta.get("iteration", 0),
+            "message_text": self._extract_message_text(message),
+        }
+        if isinstance(message.data, dict) and "previous" in message.data and "input" in message.data:
+            ctx["root"] = message.data.get("input", ctx["root"])
+            ctx["previous"] = message.data.get("previous", "")
+
+        tmpl = load_prompt_text(self.config.prompt_file)
+        if tmpl:
+            return tmpl.format_map(SafeDict(ctx))
+        return ctx["message_text"] or str(message.data)
 
     def run(self, message: Message) -> Result:
-        prompt = self.config.prompt or message.get("prompt") or str(message.data)
+        prompt = self._build_prompt(message)
         text = self.llm_fn(prompt, **self.config.model_config)
         return Result.ok(output={"text": text}, display_output=text)

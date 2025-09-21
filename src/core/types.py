@@ -1,19 +1,19 @@
 from __future__ import annotations
-from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, Optional, List, Literal
+from dataclasses import dataclass, field
+from typing import Any, Dict, Optional, List
 
 
 ControlFlag = Dict[str, Any]
 """
-Control flags understood by the WorkflowManager:
-- goto: Optional[str]   -> jump to a specific next agent by name
-- repeat: bool          -> re-execute the previous producer agent
-- halt: bool            -> stop the workflow (successful or not)
+Entendido pelo WorkflowManager:
+- goto: Optional[str]   -> pula para um nó específico
+- repeat: bool          -> refaz o produtor anterior (loop de reflexão)
+- halt: bool            -> encerra o fluxo
 """
 
 @dataclass
 class Message:
-    """Standard message that flows between agents."""
+    """Envelope padrão que circula no fluxo."""
     data: Any
     meta: Dict[str, Any] = field(default_factory=dict)
 
@@ -24,14 +24,13 @@ class Message:
 
 @dataclass
 class Result:
-    """Standard agent result."""
+    """Saída padrão de qualquer agente."""
     success: bool
     output: Any = None
     display_output: Optional[str] = None
     control: ControlFlag = field(default_factory=dict)
     metrics: Dict[str, Any] = field(default_factory=dict)
-    # Optional suggestion for downstream (e.g., prompt/model overrides)
-    overrides: Dict[str, Any] = field(default_factory=dict)
+    overrides: Dict[str, Any] = field(default_factory=dict)  # prompts/model_config futuros
 
     @staticmethod
     def ok(output: Any = None, display_output: Optional[str] = None,
@@ -43,7 +42,7 @@ class Result:
             display_output=display_output,
             control=control or {},
             overrides=overrides or {},
-            metrics=metrics or {}
+            metrics=metrics or {},
         )
 
     @staticmethod
@@ -56,11 +55,13 @@ class Result:
             display_output=display_output,
             control=control or {},
             overrides=overrides or {},
-            metrics=metrics or {}
+            metrics=metrics or {},
         )
+
 
 class WorkflowError(Exception):
     pass
+
 
 class AgentExecutionError(Exception):
     pass

@@ -1,10 +1,10 @@
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Callable, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
 
-from src.core.agent import BaseAgent, AgentConfig
+from src.core.agent import BaseAgent, AgentConfig, LLMCallable, load_prompt_text, SafeDict
 from src.core.types import Message, Result
 
 
@@ -40,19 +40,35 @@ def _score_keywords(text: str, keywords: List[str]) -> int:
 def _safe_json_parse(s: str) -> Optional[Dict[str, Any]]:
     """
     Tenta parsear JSON de forma resiliente. Se falhar, tenta extrair um bloco {...}.
+    Também tenta converter single quotes para double quotes para JSON válido.
     """
     s = s.strip()
+    
+    # Tentativa 1: JSON direto
     try:
         return json.loads(s)
     except Exception:
         pass
-    # tenta capturar o maior bloco JSON
+    
+    # Tentativa 2: Extrair bloco JSON
     m = re.search(r"\{.*\}", s, flags=re.DOTALL)
     if m:
+        json_block = m.group(0)
+        
+        # Tentativa 2a: JSON direto do bloco
         try:
-            return json.loads(m.group(0))
+            return json.loads(json_block)
         except Exception:
-            return None
+            pass
+        
+        # Tentativa 2b: Converter single quotes para double quotes
+        try:
+            # Substitui single quotes por double quotes, mas cuidado com aspas dentro de strings
+            fixed_json = json_block.replace("'", '"')
+            return json.loads(fixed_json)
+        except Exception:
+            pass
+    
     return None
 
 
@@ -80,9 +96,9 @@ class SwitchAgent(BaseAgent):
       - Caso não fornecido, o LLM vira um stub que devolve a primeira rota (apenas para dev).
     """
 
-    def __init__(self, config: AgentConfig, llm_fn: Optional[Callable[..., str]] = None):
+    def __init__(self, config: AgentConfig, llm_fn: LLMCallable):
         super().__init__(config)
-        self.llm_fn = llm_fn or self._stub_llm
+        self.llm_fn = llm_fn
 
     # ------------------------ API principal ----------------------------
 
@@ -136,6 +152,7 @@ class SwitchAgent(BaseAgent):
             mode = "hybrid"
 
         conf_thr = float(mc.get("confidence_threshold", 0.55))
+        prompt_file = mc.get("prompt_file") or "switch_agent.md"
 
         # normaliza keywords
         norm_routes: Dict[str, Dict[str, Any]] = {}
@@ -153,7 +170,8 @@ class SwitchAgent(BaseAgent):
             "routes": norm_routes,
             "default": default_route,
             "mode": mode,
-            "confidence_threshold": conf_thr
+            "confidence_threshold": conf_thr,
+            "prompt_file": prompt_file
         }
 
     def _route_with_keywords(self, text: str, cfg: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, int]]:
@@ -186,15 +204,16 @@ class SwitchAgent(BaseAgent):
                 "keywords": spec.get("keywords", []) or []
             })
 
-        # Prompt enxuto, sem raciocínio oculto; pedimos resposta JSON direta.
-        prompt = (
-            "You are a strict router that selects exactly ONE route for the user request.\n"
-            "Pick the best matching option among the provided routes.\n"
-            "Return ONLY a compact JSON object with: route (string), confidence (0..1), reasons (short string).\n\n"
-            f"USER_REQUEST:\n{text}\n\n"
-            f"ROUTE_OPTIONS:\n{json.dumps(options, ensure_ascii=False)}\n\n"
-            'RESPONSE_FORMAT:\n{"route": "LABEL_FROM_OPTIONS", "confidence": 0.0, "reasons": "short"}'
-        )
+        # Load prompt template from file
+        prompt_tmpl = load_prompt_text(cfg["prompt_file"])
+        if not prompt_tmpl:
+            raise FileNotFoundError(f"SwitchAgent prompt not found: {cfg['prompt_file']}")
+
+        # Format the prompt using SafeDict
+        prompt = prompt_tmpl.format_map(SafeDict({
+            "text": text,
+            "route_options": json.dumps(options, ensure_ascii=False)
+        }))
 
         try:
             llm_raw = self.llm_fn(prompt, **self.config.model_config)
@@ -216,16 +235,3 @@ class SwitchAgent(BaseAgent):
         reasons = parsed.get("reasons", "")
         details = {"llm_raw": llm_raw, "parsed": {"route": route, "confidence": conf, "reasons": reasons}}
         return route, conf, details
-
-    # ------------------------ LLM STUB --------------------------------
-
-    def _stub_llm(self, prompt: str, **kwargs) -> str:
-        """
-        Stub para desenvolvimento sem LLM conectado: sempre retorna a PRIMEIRA rota.
-        Produz JSON válido para as funções de parse funcionarem.
-        """
-        routes = kwargs.get("routes") or kwargs.get("model_config", {}).get("routes")
-        first_label = ""
-        if isinstance(routes, dict) and routes:
-            first_label = next(iter(routes.keys()))
-        return json.dumps({"route": first_label, "confidence": 0.01, "reasons": "stub"})
