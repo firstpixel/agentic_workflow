@@ -1,27 +1,24 @@
 import os
-# from agents.model_router import ModelRouterAgent  # TODO: Implement ModelRouterAgent
+from agents.prompt_switcher import PromptSwitcherAgent
+from src.agents.model_selector import ModelSelectorAgent  # Now we have the implementation
 from src.agents.approval_gate import ApprovalGateAgent
 from src.core.workflow_manager import WorkflowManager
-from src.core.agent import AgentConfig
-from src.agents.echo import EchoAgent
+from src.core.agent import AgentConfig, LLMAgent
+from src.core.types import Result
+from src.agents.switch_agent import SwitchAgent
+from src.agents.critic_agent import CriticAgent
 
-# def main():
-#     agents = {
-#         "Start": EchoAgent(AgentConfig(name="Start")),
-#         "Then":  EchoAgent(AgentConfig(name="Then")),
-#     }
-#     graph = {
-#         "Start": ["Then"],
-#         "Then":  []
-#     }
-#     wm = WorkflowManager(graph, agents)
-#     results = wm.run_workflow("Start", {"msg": "hello"})
-#     for r in results:
-#         print(r.success, r.output)
+# Um agente de eco simples para visualizar para onde roteamos
+from src.agents.echo import EchoAgent  # use o echo do exemplo do Task 1 (ou crie agora)
+from src.agents.fanout_agent import FanOutAgent
+from src.agents.join_agent import JoinAgent
 
-# if __name__ == "__main__":
-#     main()
-
+from src.memory import MongoSTM, QdrantVectorStore, MemoryManager
+from src.agents.rag_retriever import RAGRetrieverAgent
+from src.agents.query_rewriter import QueryRewriterAgent
+from src.agents.guardrails_agent import GuardrailsAgent
+from src.eval.metrics import MetricsCollector  # <-- Add this import
+from src.eval.evaluation import EvalCase, EvaluationRunner  # <-- Add this import
 
 from src.core.workflow_manager import WorkflowManager
 from src.core.agent import AgentConfig, LLMAgent
@@ -42,49 +39,119 @@ from src.eval.metrics import MetricsCollector  # <-- Add this import
 from src.eval.evaluation import EvalCase, EvaluationRunner  # <-- Add this import
 
 
-# TODO: Implement ModelRouterAgent first
-# def demo_model_routing():
-#     """
-#     Router -> Writer
-#     The router classifies and overrides Writer's model_config (e.g., temperature) per class.
-#     """
-#     model = os.getenv("OLLAMA_MODEL", "llama3")
-# 
-#     router = ModelRouterAgent(AgentConfig(
-#         name="ModelRouter",
-#         model_config={
-#             "prompt_file": "model_router.md",
-#             "model": model,
-#             "options": {"temperature": 0.0},
-#             "classes": {
-#                 "SIMPLE":   {"model": model, "options": {"temperature": 0.1}},
-#                 "STANDARD": {"model": model, "options": {"temperature": 0.3}},
-#                 "COMPLEX":  {"model": model, "options": {"temperature": 0.6}}
-#             },
-#             "targets": ["Writer"]
-#         }
-#     ))
-# 
-#     writer = LLMAgent(AgentConfig(
-#         name="Writer",
-#         prompt_file="tech_writer.md",
-#         model_config={"model": model, "options": {"temperature": 0.4}}  # baseline; will be overridden
-#     ))
-# 
-#     agents = {"ModelRouter": router, "Writer": writer}
-#     graph  = {"ModelRouter": ["Writer"], "Writer": []}
-# 
-#     wm = WorkflowManager(graph, agents)
-# 
-#     user_text = {"text": "Create a quick summary for the API design. [[SIMPLE]]"}
-#     results = wm.run_workflow("ModelRouter", user_text)
-# 
-#     print("\n=== TASK 9: Model Routing Sample ===")
-#     for r in results:
-#         print("->", r.display_output or r.output)
-# 
-#     # Show the effective writer config after routing (should reflect SIMPLE override)
-#     print("Writer model_config after routing:", writer.config.model_config)
+def demo_prompt_overrides():
+    """
+    PromptSwitcher -> Writer
+    The switcher picks the Writer's prompt file dynamically via overrides.
+    Deterministic tokens:
+      [[BULLETS]]   => writer_bullets.md
+      [[PARAGRAPH]] => writer_paragraph.md
+    """
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+
+    switcher = PromptSwitcherAgent(AgentConfig(
+        name="PromptSwitcher",
+        model_config={
+            "prompt_file": "prompt_switcher.md",
+            "model": model,
+            "options": {"temperature": 0.0},
+            "default_targets": {"Writer": "writer_bullets.md"}
+        }
+    ))
+
+    writer = LLMAgent(AgentConfig(
+        name="Writer",
+        prompt_file="writer_bullets.md",  # baseline; will be overridden if [[PARAGRAPH]] present
+        model_config={"model": model, "options": {"temperature": 0.1}}
+    ))
+
+    agents = {"PromptSwitcher": switcher, "Writer": writer}
+    graph  = {"PromptSwitcher": ["Writer"], "Writer": []}
+
+    wm = WorkflowManager(graph, agents)
+
+    # Force paragraph style using token [[PARAGRAPH]] (deterministic)
+    user_text = {"text": "Outline the design choices for the API telemetry module. [[PARAGRAPH]]"}
+    results = wm.run_workflow("PromptSwitcher", user_text)
+
+    print("\n=== TASK 10: Prompt Overrides Sample ===")
+    for r in results:
+        print("->", r.display_output or r.output)
+
+    print("Writer prompt_file after routing:", writer.config.prompt_file)
+
+def demo_model_routing():
+    """
+    ModelSelector -> Writer
+    The model selector classifies and overrides Writer's model_config based on task complexity.
+    Uses 3 different models: SIMPLE->1b, STANDARD->3b, COMPLEX->gemma3
+    """
+    # Force different models instead of using the same env var
+    model1 = "llama3.2:1b"    # For SIMPLE tasks
+    model2 = "llama3.2:3b"    # For STANDARD tasks  
+    model3 = "gemma3:latest"  # For COMPLEX tasks
+
+    router = ModelSelectorAgent(AgentConfig(
+        name="ModelSelector",
+        prompt_file="model_router.md",
+        model_config={
+            "model": model2,  # Use 3b model for better instruction following
+            "options": {"temperature": 0.0},
+            "classes": {
+                "SIMPLE":   {"model": model1, "options": {"temperature": 0.1}},
+                "STANDARD": {"model": model2, "options": {"temperature": 0.3}},
+                "COMPLEX":  {"model": model3, "options": {"temperature": 0.6}}
+            },
+            "targets": ["Writer"]
+        }
+    ))
+
+    # Writer starts with default model, will be overridden by selector
+    writer = LLMAgent(AgentConfig(
+        name="Writer",
+        prompt_file="tech_writer.md",
+        model_config={"model": model1, "options": {"temperature": 0.0}}
+    ))
+
+    agents = {"ModelSelector": router, "Writer": writer}
+    graph  = {"ModelSelector": ["Writer"], "Writer": []}
+
+    wm = WorkflowManager(graph, agents)
+
+    # Test SIMPLE task - very basic task with explicit marker
+    print("\n=== Model Routing Sample (SIMPLE) ===")
+    user_text = {"text": "Write one sentence summary. [[SIMPLE]]"}
+    simple_result = wm.run_workflow("ModelSelector", user_text)
+    for r in simple_result:
+        print("->", r.display_output or r.output)
+    print(f"✅ Writer model after SIMPLE: {writer.config.model_config}")
+
+    # Reset writer config for next test
+    writer.config.model_config = {"model": model1, "options": {"temperature": 0.0}}
+    
+    # Test STANDARD task - medium complexity with explicit marker
+    print("\n=== Model Routing Sample (STANDARD) ===")
+    standard_text = {"text": "Analyze and explain the design patterns. [[STANDARD]]"}
+    standard_result = wm.run_workflow("ModelSelector", standard_text)
+    for r in standard_result:
+        print("->", r.display_output or r.output)
+    print(f"✅ Writer model after STANDARD: {writer.config.model_config}")
+
+    # Reset writer config for next test
+    writer.config.model_config = {"model": model1, "options": {"temperature": 0.0}}
+    
+    # Test COMPLEX task - architectural design with explicit marker
+    print("\n=== Model Routing Sample (COMPLEX) ===")
+    complex_text = {"text": "[[COMPLEX]] Design microservices architecture"}
+    complex_result = wm.run_workflow("ModelSelector", complex_text)
+    for r in complex_result:
+        print("->", r.display_output or r.output)
+    print(f"✅ Writer model after COMPLEX: {writer.config.model_config}")
+
+    print("\n🎯 Model routing complete! Each complexity level used different models:")
+    print(f"   SIMPLE → {model1} (temp 0.1)")
+    print(f"   STANDARD → {model2} (temp 0.3)")  
+    print(f"   COMPLEX → {model3} (temp 0.6)")
 
 
 def demo_metrics_eval():
@@ -93,7 +160,16 @@ def demo_metrics_eval():
     - Prompt do Writer carregado de arquivo .md (tech_writer.md).
     - Juiz por regex (determinístico) e exemplo de juiz LLM (eval_judge.md).
     """
-    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+    
+    print(f"🔍 Checking Ollama availability for evaluation demo with model: {model}")
+    ollama_available = check_ollama_availability(model)
+    
+    if not ollama_available:
+        print("⚠️  Ollama not available - running only regex evaluation")
+    else:
+        print("✅ Ollama is available, proceeding with full evaluation demo...")
+    
     model_cfg = {"model": model, "options": {"temperature": 0.1}}
 
     writer = LLMAgent(AgentConfig(
@@ -125,12 +201,20 @@ def demo_metrics_eval():
     for r in results:
         print(r)
 
-    # (Opcional) Juiz LLM com prompt .md (eval_judge.md)
-    judge_llm_cfg = {"model": model, "options": {"temperature": 0.1}}
-    results_llm = runner.run(cases, judge="llm", llm_model_cfg=judge_llm_cfg, judge_prompt_file="eval_judge.md")
-    print("\n=== Eval (LLM) ===")
-    for r in results_llm:
-        print(r)
+    # (Opcional) Juiz LLM com prompt .md (eval_judge.md) - só se Ollama estiver disponível
+    if ollama_available:
+        judge_llm_cfg = {"model": model, "options": {"temperature": 0.1}}
+        try:
+            results_llm = runner.run(cases, judge="llm", llm_model_cfg=judge_llm_cfg, judge_prompt_file="eval_judge.md")
+            print("\n=== Eval (LLM) ===")
+            for r in results_llm:
+                print(r)
+        except Exception as e:
+            print(f"\n⚠️  LLM evaluation failed: {str(e)}")
+            print("   Continuing with regex evaluation only...")
+    else:
+        print("\n⚠️  Skipping LLM evaluation - Ollama not available")
+        print("   Set OLLAMA_MODEL environment variable and ensure Ollama is running")
 
     print("\n=== Metrics Summary ===")
     print(metrics.summary())
@@ -142,7 +226,7 @@ def demo_human_in_the_loop():
       1) ApprovalGate (request) -> HALT com resumo para humano
       2) ApprovalGate (decision=APPROVE) -> segue para Writer
     """
-    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
     model_cfg = {"model": model, "options": {"temperature": 0.1}}
 
     # Gate de aprovação
@@ -151,7 +235,7 @@ def demo_human_in_the_loop():
         model_config={
             "summary_prompt_file": "approval_request.md",
             "next_on_approve": "Writer",
-            "next_on_reject": "Rework",    # opcional
+            # next_on_reject removed - rejections will halt the workflow
             "model": model,
             "options": {"temperature": 0.1}
         }
@@ -235,7 +319,7 @@ def demo_human_in_the_loop():
         print("->", r.display_output or r.output)
 
 def demo_guardrails():
-    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
     model_cfg = {"model": model, "options": {"temperature": 0.1}}
 
     guard = GuardrailsAgent(AgentConfig(
@@ -274,7 +358,7 @@ def demo_query_rewriter():
     Sample do QueryRewriter em fluxo:
     QueryRewriter -> (Retriever) -> Answerer
     """
-    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
     model_cfg = {"model": model, "options": {"temperature": 0.1}, "prompt_file": "query_rewriter.md"}
 
     # Rewriter (usa prompt .md)
@@ -327,7 +411,7 @@ def demo_rag_memory():
       - MONGODB_URI
       - OLLAMA_MODEL (e opcional OLLAMA_HOST)
     """
-    model = os.getenv("OLLAMA_MODEL","llama3")
+    model = os.getenv("OLLAMA_MODEL","llama3.2:1b")
     model_cfg = {"model": model, "options": {"temperature": 0.1}}
 
     # --- Memória: STM (Mongo) + LTM/RAG (Qdrant)
@@ -492,7 +576,8 @@ def demo_switch_agent_routing():
         "default": "Support",
         "mode": "hybrid",                 # "llm" | "keywords" | "hybrid"
         "confidence_threshold": 0.4,     # Lowered to accept more LLM decisions
-        "model": model                    # Use the same model as availability check
+        "model": model,                   # Use the same model as availability check
+        "options": {"temperature": 0.0}  # More deterministic responses
     }
 
     agents = {
@@ -642,7 +727,9 @@ def main():
 
     demo_metrics_eval()
 
-    # demo_model_routing()  # TODO: Implement ModelRouterAgent first
+    demo_model_routing()  
+    
+    demo_prompt_overrides()
 
 
 if __name__ == "__main__":

@@ -40,23 +40,29 @@ def _score_keywords(text: str, keywords: List[str]) -> int:
 def _parse_markdown_response(response: str) -> Optional[Dict[str, Any]]:
     """
     Parse markdown-formatted response from LLM instead of JSON.
-    Expected format:
-    ## Route: [route_name]
-    ## Confidence: [0.0-1.0]
-    ## Reasons: [explanation]
+    Expected format (flexible):
+    ## Route: [route_name] OR ## Route\n[route_name]
+    ## Confidence: [0.0-1.0] OR ## Confidence\n[0.0-1.0]
+    ## Reasons: [explanation] OR ## Reasons\n[explanation]
     """
     if not response:
         return None
     
     result = {}
     
-    # Extract route
-    route_match = re.search(r"##\s*Route\s*[:：]\s*(.+)", response, re.IGNORECASE)
+    # Extract route - handle both same-line and next-line formats
+    route_match = re.search(r"##\s*Route\s*[:：]?\s*(.+?)(?=\n|$)", response, re.IGNORECASE)
+    if not route_match:
+        # Try multi-line format: ## Route\nActualValue
+        route_match = re.search(r"##\s*Route\s*[:：]?\s*\n\s*(.+?)(?=\n|$)", response, re.IGNORECASE)
     if route_match:
         result["route"] = route_match.group(1).strip()
     
-    # Extract confidence
-    conf_match = re.search(r"##\s*Confidence\s*[:：]\s*([\d.]+)", response, re.IGNORECASE)
+    # Extract confidence - handle both formats
+    conf_match = re.search(r"##\s*Confidence\s*[:：]?\s*([\d.]+)", response, re.IGNORECASE)
+    if not conf_match:
+        # Try multi-line format: ## Confidence\n0.8
+        conf_match = re.search(r"##\s*Confidence\s*[:：]?\s*\n\s*([\d.]+)", response, re.IGNORECASE)
     if conf_match:
         try:
             result["confidence"] = float(conf_match.group(1))
@@ -65,8 +71,11 @@ def _parse_markdown_response(response: str) -> Optional[Dict[str, Any]]:
     else:
         result["confidence"] = 0.0
     
-    # Extract reasons
-    reasons_match = re.search(r"##\s*Reasons?\s*[:：]\s*(.+?)(?=##|$)", response, re.IGNORECASE | re.DOTALL)
+    # Extract reasons - handle both formats
+    reasons_match = re.search(r"##\s*Reasons?\s*[:：]?\s*(.+?)(?=##|$)", response, re.IGNORECASE | re.DOTALL)
+    if not reasons_match:
+        # Try multi-line format: ## Reasons\nActual explanation
+        reasons_match = re.search(r"##\s*Reasons?\s*[:：]?\s*\n\s*(.+?)(?=##|$)", response, re.IGNORECASE | re.DOTALL)
     if reasons_match:
         result["reasons"] = reasons_match.group(1).strip()
     else:
