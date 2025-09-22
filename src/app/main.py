@@ -1,4 +1,5 @@
 import os
+# from agents.model_router import ModelRouterAgent  # TODO: Implement ModelRouterAgent
 from src.agents.approval_gate import ApprovalGateAgent
 from src.core.workflow_manager import WorkflowManager
 from src.core.agent import AgentConfig
@@ -39,6 +40,52 @@ from src.agents.query_rewriter import QueryRewriterAgent
 from src.agents.guardrails_agent import GuardrailsAgent
 from src.eval.metrics import MetricsCollector  # <-- Add this import
 from src.eval.evaluation import EvalCase, EvaluationRunner  # <-- Add this import
+
+
+# TODO: Implement ModelRouterAgent first
+# def demo_model_routing():
+#     """
+#     Router -> Writer
+#     The router classifies and overrides Writer's model_config (e.g., temperature) per class.
+#     """
+#     model = os.getenv("OLLAMA_MODEL", "llama3")
+# 
+#     router = ModelRouterAgent(AgentConfig(
+#         name="ModelRouter",
+#         model_config={
+#             "prompt_file": "model_router.md",
+#             "model": model,
+#             "options": {"temperature": 0.0},
+#             "classes": {
+#                 "SIMPLE":   {"model": model, "options": {"temperature": 0.1}},
+#                 "STANDARD": {"model": model, "options": {"temperature": 0.3}},
+#                 "COMPLEX":  {"model": model, "options": {"temperature": 0.6}}
+#             },
+#             "targets": ["Writer"]
+#         }
+#     ))
+# 
+#     writer = LLMAgent(AgentConfig(
+#         name="Writer",
+#         prompt_file="tech_writer.md",
+#         model_config={"model": model, "options": {"temperature": 0.4}}  # baseline; will be overridden
+#     ))
+# 
+#     agents = {"ModelRouter": router, "Writer": writer}
+#     graph  = {"ModelRouter": ["Writer"], "Writer": []}
+# 
+#     wm = WorkflowManager(graph, agents)
+# 
+#     user_text = {"text": "Create a quick summary for the API design. [[SIMPLE]]"}
+#     results = wm.run_workflow("ModelRouter", user_text)
+# 
+#     print("\n=== TASK 9: Model Routing Sample ===")
+#     for r in results:
+#         print("->", r.display_output or r.output)
+# 
+#     # Show the effective writer config after routing (should reflect SIMPLE override)
+#     print("Writer model_config after routing:", writer.config.model_config)
+
 
 def demo_metrics_eval():
     """
@@ -594,6 +641,8 @@ def main():
     demo_human_in_the_loop()
 
     demo_metrics_eval()
+
+    # demo_model_routing()  # TODO: Implement ModelRouterAgent first
 
 
 if __name__ == "__main__":

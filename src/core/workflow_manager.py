@@ -41,8 +41,37 @@ class WorkflowManager:
         q.append((node, msg))
 
     def _apply_overrides(self, agent_name: str, res: Result):
-        if res.overrides:
-            self.run_overrides[agent_name].update(res.overrides)
+        """Store overrides (prompt/model_config).
+        Supports two styles:
+          1) legacy: res.overrides has direct keys for the same agent (applied when this agent runs again)
+          2) targeted: res.overrides['for'] = { '<TargetAgent>': {'model_config': {...}, 'prompt_file': '...'} }
+             These are applied when the *target* agent runs.
+        """
+        if not res.overrides:
+            return
+        # legacy behavior (keep it)
+        direct_mc = res.overrides.get("model_config")
+        direct_pf = res.overrides.get("prompt_file")
+        if direct_mc or direct_pf:
+            current = self.run_overrides.get(agent_name, {})
+            if direct_mc:
+                current.setdefault("model_config", {}).update(direct_mc)
+            if direct_pf:
+                current["prompt_file"] = direct_pf
+            self.run_overrides[agent_name] = current
+
+        # targeted behavior
+        targeted = res.overrides.get("for")
+        if isinstance(targeted, dict):
+            for tgt, cfg in targeted.items():
+                if not isinstance(cfg, dict):
+                    continue
+                cur = self.run_overrides.get(tgt, {})
+                if "model_config" in cfg and isinstance(cfg["model_config"], dict):
+                    cur.setdefault("model_config", {}).update(cfg["model_config"])
+                if "prompt_file" in cfg and isinstance(cfg["prompt_file"], str):
+                    cur["prompt_file"] = cfg["prompt_file"]
+                self.run_overrides[tgt] = cur
 
     def _next_nodes(self, current: str) -> List[str]:
         return self.graph.get(current, [])
@@ -63,6 +92,16 @@ class WorkflowManager:
 
             if self.metrics:
                 self.metrics.on_start_node(node)
+
+            # Apply prompt/model overrides targeted to *this* node (T9)
+            overrides = self.run_overrides.get(node, {})
+            if overrides.get("model_config"):
+                agent.config.model_config.update(overrides["model_config"])
+            # prefer 'prompt_file' (markdown prompt path) over old 'prompt'
+            if overrides.get("prompt_file"):
+                agent.config.prompt_file = overrides["prompt_file"]
+            elif overrides.get("prompt") and hasattr(agent.config, "prompt"):
+                agent.config.prompt = overrides["prompt"]
 
             ns = self.state[node]
             ns.expected_inputs = max(ns.expected_inputs, int(msg.meta.get("expected_inputs", 1)))
