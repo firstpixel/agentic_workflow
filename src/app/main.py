@@ -20,37 +20,27 @@ from src.core.agent import AgentConfig, LLMAgent
 from src.core.types import Result
 from src.agents.switch_agent import SwitchAgent
 from src.agents.critic_agent import CriticAgent
-
-# Um agente de eco simples para visualizar para onde roteamos
-from src.agents.echo import EchoAgent  # use o echo do exemplo do Task 1 (ou crie agora)
-from src.agents.fanout_agent import FanOutAgent
-from src.agents.join_agent import JoinAgent
-
-from src.memory import MongoSTM, QdrantVectorStore, MemoryManager
-from src.agents.rag_retriever import RAGRetrieverAgent
-from src.agents.query_rewriter import QueryRewriterAgent
-from src.agents.guardrails_agent import GuardrailsAgent
-from src.eval.metrics import MetricsCollector  # <-- Add this import
-from src.eval.evaluation import EvalCase, EvaluationRunner  # <-- Add this import
 from src.core.utils import to_display  # <-- Add this import
 
 # Add import for get_event_bus
 from src.core.event_bus import get_event_bus
-
 
 from src.app.flows import (
     make_prompt_handoff_flow,
     make_guardrails_writer_flow,
 )
 
-def demo_eventbus():
+def demo_eventbus(auto_approve=False):
     """
     Task 13 — EventBus + Settings
     Fase 1: ApprovalGate publica uma 'solicitação' no EventBus
     Subscriber simula a decisão humana e publica a decisão
     Fase 2: Rodamos o ApprovalGate com a decisão publicada
+    
+    Args:
+        auto_approve: If True, automatically approve without user input (for testing)
     """
-    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
     bus = get_event_bus()
 
     approval = ApprovalGateAgent(AgentConfig(
@@ -89,19 +79,53 @@ def demo_eventbus():
     })
     print(f"[bus] published approval.request for {approval_id}")
 
-    # Subscriber (simula humano): ao receber, publica decisão APPROVE
-    def _on_request(ch, payload):
-        aid = payload.get("approval_id")
-        print(f"[bus] received {ch} for {aid}, simulating APPROVE")
-        bus.publish(f"approval.decision.{aid}", {
-            "approval_id": aid,
+    # Simula ou solicita decisão humana
+    if auto_approve:
+        print(f"[bus] auto-approving for automated demo...")
+        decision = {
+            "approval_id": approval_id,
             "human_decision": "APPROVE",
-            "human_comment": "Looks good."
-        })
-    sub_id = bus.subscribe_once("approval.request", _on_request)
+            "human_comment": "Auto-approved for demo"
+        }
+    else:
+        # Display the summary for human review via EventBus
+        print("\n" + "="*60)
+        print("🧑‍⚖️ EVENTBUS HUMAN APPROVAL REQUIRED")
+        print("="*60)
+        print("📋 SUMMARY FROM EVENTBUS:")
+        print(summary_md)
+        print("\n" + "-"*60)
+        
+        # Prompt user for decision
+        while True:
+            print("\n🤔 Do you approve this EventBus request?")
+            print("   1. APPROVE - Continue with the workflow")
+            print("   2. REJECT - Stop the workflow")
+            print("   3. Exit demo")
+            
+            choice = input("\nEnter your choice (1/2/3): ").strip()
+            
+            if choice == "1":
+                human_decision = "APPROVE"
+                human_comment = input("Optional comment (press Enter to skip): ").strip() or "Approved via EventBus"
+                break
+            elif choice == "2":
+                human_decision = "REJECT"
+                human_comment = input("Reason for rejection (press Enter to skip): ").strip() or "Rejected via EventBus"
+                break
+            elif choice == "3":
+                print("👋 Exiting EventBus demo...")
+                return
+            else:
+                print("❌ Invalid choice. Please enter 1, 2, or 3.")
 
-    # Aguarda decisão (no mundo real, seria outro processo/UI)
-    decision = bus.wait_for(f"approval.decision.{approval_id}", lambda p: p.get("approval_id") == approval_id, timeout_sec=5.0)
+        decision = {
+            "approval_id": approval_id,
+            "human_decision": human_decision,
+            "human_comment": human_comment
+        }
+        
+        print(f"[bus] human decided: {human_decision}")
     if not decision:
         print("[bus] no decision received (timeout).")
         return
@@ -119,7 +143,7 @@ def demo_flows_sample():
       1) Prompt/Plan Handoff: PromptAgent -> Writer
       2) Guardrails -> Writer
     """
-    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 
     # 1) Prompt/Plan Handoff
     fb1 = make_prompt_handoff_flow(model=model)
@@ -138,7 +162,7 @@ def demo_flows_sample():
         print("->", r.display_output or r.output)
 
 def demo_display_unwrap():
-    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 
     writer = LLMAgent(AgentConfig(
         name="Writer",
@@ -167,7 +191,7 @@ def demo_prompt_handoff():
       - PromptAgent também envia um 'plan_md' como payload por ramo
       - Writer usa {plan_md} no template .md
     """
-    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
 
     prompt_agent = PromptAgent(AgentConfig(
         name="PromptAgent",
@@ -386,11 +410,14 @@ def demo_metrics_eval():
     print(metrics.summary())
     print("\nCSV:\n", metrics.to_csv())
 
-def demo_human_in_the_loop():
+def demo_human_in_the_loop(auto_approve=False):
     """
     Padrão HITL em duas chamadas:
       1) ApprovalGate (request) -> HALT com resumo para humano
       2) ApprovalGate (decision=APPROVE) -> segue para Writer
+    
+    Args:
+        auto_approve: If True, automatically approve without user input (for testing)
     """
     model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
     model_cfg = {"model": model, "options": {"temperature": 0.1}}
@@ -449,28 +476,33 @@ def demo_human_in_the_loop():
     print(summary_content)
     print("\n" + "-"*60)
     
-    # Prompt user for decision
-    while True:
-        print("\n🤔 Do you approve this request?")
-        print("   1. APPROVE - Continue with the writer")
-        print("   2. REJECT - Stop the workflow")
-        print("   3. Exit demo")
-        
-        choice = input("\nEnter your choice (1/2/3): ").strip()
-        
-        if choice == "1":
-            human_decision = "APPROVE"
-            human_comment = input("Optional comment (press Enter to skip): ").strip() or "Approved by user"
-            break
-        elif choice == "2":
-            human_decision = "REJECT"
-            human_comment = input("Reason for rejection (press Enter to skip): ").strip() or "Rejected by user"
-            break
-        elif choice == "3":
-            print("👋 Exiting HITL demo...")
-            return
-        else:
-            print("❌ Invalid choice. Please enter 1, 2, or 3.")
+    # Prompt user for decision or auto-approve if requested
+    if auto_approve:
+        print("\n🤖 Auto-approving for automated testing...")
+        human_decision = "APPROVE"
+        human_comment = "Auto-approved for demo"
+    else:
+        while True:
+            print("\n🤔 Do you approve this request?")
+            print("   1. APPROVE - Continue with the writer")
+            print("   2. REJECT - Stop the workflow")
+            print("   3. Exit demo")
+            
+            choice = input("\nEnter your choice (1/2/3): ").strip()
+            
+            if choice == "1":
+                human_decision = "APPROVE"
+                human_comment = input("Optional comment (press Enter to skip): ").strip() or "Approved by user"
+                break
+            elif choice == "2":
+                human_decision = "REJECT"
+                human_comment = input("Reason for rejection (press Enter to skip): ").strip() or "Rejected by user"
+                break
+            elif choice == "3":
+                print("👋 Exiting HITL demo...")
+                return
+            else:
+                print("❌ Invalid choice. Please enter 1, 2, or 3.")
 
     decision_payload = {
         "approval_id": approval_id,
@@ -889,7 +921,7 @@ def main():
     
     demo_guardrails()
     
-    demo_human_in_the_loop()
+    demo_human_in_the_loop(auto_approve=True)
 
     demo_metrics_eval()
 
@@ -901,9 +933,21 @@ def main():
     
     demo_flows_sample()
     
-    demo_eventbus()
+    demo_eventbus(auto_approve=True)
+
+
+def demo_eventbus_interactive():
+    """
+    Interactive version of EventBus demo for testing human approval
+    """
+    print("🚀 Testing Interactive EventBus Human Approval\n")
+    demo_eventbus(auto_approve=False)
 
 
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--hitl":
+        demo_eventbus_interactive()
+    else:
+        main()
 
