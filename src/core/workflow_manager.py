@@ -5,6 +5,7 @@ from collections import deque, defaultdict
 
 from .types import Message, Result, WorkflowError
 from .agent import BaseAgent
+from src.eval.metrics import MetricsCollector  # opcional
 
 
 @dataclass
@@ -15,12 +16,14 @@ class NodeState:
 
 
 class WorkflowManager:
-    def __init__(self, graph: Dict[str, List[str]], agents: Dict[str, BaseAgent]):
+    def __init__(self, graph: Dict[str, List[str]], agents: Dict[str, BaseAgent],
+                 metrics: Optional[MetricsCollector] = None):
         self.graph = graph
         self.agents = agents
         self.state: Dict[str, NodeState] = defaultdict(NodeState)
         self.run_overrides: Dict[str, Dict[str, Any]] = defaultdict(dict)
         self.in_degree: Dict[str, int] = self._compute_in_degree(graph)
+        self.metrics = metrics
 
     @staticmethod
     def _compute_in_degree(graph: Dict[str, List[str]]) -> Dict[str, int]:
@@ -30,7 +33,6 @@ class WorkflowManager:
             nodes.update(targets)
             for t in targets:
                 indeg[t] += 1
-        # nós de entrada podem não aparecer como targets
         for n in nodes:
             indeg.setdefault(n, 0)
         return dict(indeg)
@@ -59,6 +61,9 @@ class WorkflowManager:
             if not agent:
                 raise WorkflowError(f"Agent '{node}' not found")
 
+            if self.metrics:
+                self.metrics.on_start_node(node)
+
             ns = self.state[node]
             ns.expected_inputs = max(ns.expected_inputs, int(msg.meta.get("expected_inputs", 1)))
             ns.received.append(msg)
@@ -71,6 +76,15 @@ class WorkflowManager:
             res = agent.execute(payload)
             results.append(res)
             ns.last_producer = payload.meta.get("last_producer")
+
+            if self.metrics:
+                # serializa uma visão do Result p/ registro
+                self.metrics.on_end_node(node, {
+                    "success": res.success,
+                    "metrics": res.metrics,
+                    "control": res.control,
+                    "output": res.output
+                })
 
             self._apply_overrides(node, res)
 
@@ -102,24 +116,15 @@ class WorkflowManager:
 
             root_obj = payload.meta.get("root")
             for nxt in next_nodes:
-                # ---- payload por ramo (FanOutAgent) ----
                 per_branch_data = res.output.get(nxt) if isinstance(res.output, dict) else None
                 data_to_send = per_branch_data if per_branch_data is not None else res.output
-
-                # ---- in_degree -> expected_inputs para o nó de destino ----
                 exp = max(1, int(self.in_degree.get(nxt, 1)))
-
                 self._enqueue(
                     q,
                     nxt,
                     Message(
                         data=data_to_send,
-                        meta={
-                            "last_producer": node,
-                            "root": root_obj,
-                            "iteration": payload.meta.get("iteration", 0),
-                            "expected_inputs": exp
-                        }
+                        meta={"last_producer": node, "root": root_obj, "iteration": payload.meta.get("iteration", 0), "expected_inputs": exp}
                     )
                 )
 

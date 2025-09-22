@@ -171,7 +171,18 @@ class LLMAgent(BaseAgent):
             return tmpl.format_map(SafeDict(ctx))
         return ctx["message_text"] or str(message.data)
 
+    # def run(self, message: Message) -> Result:
+    #     prompt = self._build_prompt(message)
+    #     text = self.llm_fn(prompt, **self.config.model_config)
+    #     return Result.ok(output={"text": text}, display_output=text)
+    
     def run(self, message: Message) -> Result:
         prompt = self._build_prompt(message)
         text = self.llm_fn(prompt, **self.config.model_config)
-        return Result.ok(output={"text": text}, display_output=text)
+        res = Result.ok(output={"text": text}, display_output=text)
+        try:
+            res.metrics["prompt_chars"] = len(prompt)
+            res.metrics["output_chars"] = len(text or "")
+        except Exception:
+            pass
+        return res
