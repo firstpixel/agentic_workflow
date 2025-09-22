@@ -2,20 +2,24 @@ from __future__ import annotations
 from typing import Any, Dict
 import re
 
-from src.core.agent import BaseAgent, AgentConfig, LLMAgent
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent, load_prompt_text, SafeDict
 from src.core.types import Message, Result
 
-# --------- Markdown parsers ----------
+# -------- Parsers de Markdown --------
 _TARGET_PROMPTS = re.compile(
     r"^###\s*TARGET\s+PROMPTS\s*\n(?P<body>.*?)(?=^\s*###\s+|\Z)",
+    re.IGNORECASE | re.MULTILINE | re.DOTALL
+)
+_PLAN = re.compile(
+    r"^###\s*PLAN\s*\n(?P<body>.*?)(?=^\s*###\s+|\Z)",
     re.IGNORECASE | re.MULTILINE | re.DOTALL
 )
 
 def _parse_target_prompts(md: str) -> Dict[str, str]:
     """
-    Parse lines under '### TARGET PROMPTS' of the form:
-      - AgentName: file_name.md
-    Returns: {'AgentName': 'file_name.md', ...}
+    Lê linhas tipo:
+      - Writer: writer_bullets.md
+    Retorna: {'Writer': 'writer_bullets.md', ...}
     """
     out: Dict[str, str] = {}
     m = _TARGET_PROMPTS.search(md or "")
@@ -27,7 +31,6 @@ def _parse_target_prompts(md: str) -> Dict[str, str]:
         if not s:
             continue
         s = s.lstrip("-• \t")
-        # Accept "Writer: writer_paragraph.md" or "Writer writer_paragraph.md"
         if ":" in s:
             k, v = s.split(":", 1)
             out[k.strip()] = v.strip()
@@ -37,23 +40,28 @@ def _parse_target_prompts(md: str) -> Dict[str, str]:
                 out[parts[0].strip()] = parts[1].strip()
     return out
 
+def _parse_plan(md: str) -> str:
+    m = _PLAN.search(md or "")
+    return (m.group("body").strip() if m else "")
+
 
 class PromptSwitcherAgent(BaseAgent):
     """
-    Decides prompt files to use downstream and emits targeted overrides.
+    Unified Prompt/Plan Handoff Agent:
+      - Decides 'prompt_file' per target agent (via Markdown parsing)
+      - Optionally generates 'plan_md' for consumption by next nodes
+      - Supports both simple prompt switching and plan handoff workflows
 
     model_config:
-      {
-        "prompt_file": "prompt_switcher.md",  # REQUIRED
-        "model": "...", "options": {...},     # forwarded to LLMAgent
-        # Optional: default_targets applied when TARGET PROMPTS section is empty
-        "default_targets": {"Writer": "writer_bullets.md"}
-      }
+    {
+      "prompt_file": "prompt_switcher.md",    # REQUIRED
+      "model": "...", "options": {...},
+      "default_targets": {"Writer": "writer_bullets.md"}  # fallback
+    }
 
     Output:
-      Result.overrides["for"] = {
-        "<AgentName>": {"prompt_file": "<file.md>"}
-      }
+      overrides["for"] = { "<Agent>": {"prompt_file": "<file.md>"} }
+      output[<Agent>]   = { "plan_md": "<markdown>" }   # payload per branch (if plan found)
     """
     def __init__(self, config: AgentConfig):
         super().__init__(config)
@@ -72,7 +80,7 @@ class PromptSwitcherAgent(BaseAgent):
         if not prompt_file:
             raise ValueError("PromptSwitcherAgent requires model_config['prompt_file'] (e.g., 'prompt_switcher.md').")
 
-        # Use LLMAgent to generate the Markdown decision (reusing your Ollama integration)
+        # Use LLMAgent to generate the Markdown decision
         llm = LLMAgent(AgentConfig(
             name=f"{self.config.name}::LLM",
             prompt_file=prompt_file,
@@ -83,15 +91,25 @@ class PromptSwitcherAgent(BaseAgent):
 
         targets = _parse_target_prompts(md)
         if not targets:
-            # apply fallback defaults if provided
             targets = dict(mc.get("default_targets") or {})
 
-        # Convert to targeted overrides for WorkflowManager (Task 9)
+        plan_md = _parse_plan(md)
+
+        # Convert to targeted overrides for WorkflowManager
         targeted = {agent_name: {"prompt_file": file_name} for agent_name, file_name in targets.items()}
 
-        disp = f"🧭 PromptSwitcher -> {targets}"
+        # Per-branch payload with plan (if available)
+        per_branch_payload: Dict[str, Any] = {}
+        for agent_name in targets.keys():
+            per_branch_payload[agent_name] = {"plan_md": plan_md} if plan_md else {}
+
+        disp = f"🧭 PromptSwitcher -> targets={targets}" + (f" plan={'yes' if plan_md else 'no'}" if plan_md else "")
         return Result.ok(
-            output={"targets": targets, "md": md},
+            output={**per_branch_payload, "targets": targets, "md": md},  # Include legacy outputs for compatibility
             display_output=disp,
             overrides={"for": targeted} if targeted else {}
         )
+
+
+# Legacy alias for backward compatibility
+PromptAgent = PromptSwitcherAgent

@@ -1,6 +1,5 @@
 import os
-from src.agents.prompt_switcher import PromptSwitcherAgent
-from src.agents.prompt_agent import PromptAgent  # <-- Add this import
+from src.agents.prompt_switcher import PromptSwitcherAgent, PromptAgent  # Unified agent
 from src.agents.model_selector import ModelSelectorAgent  # Now we have the implementation
 from src.agents.approval_gate import ApprovalGateAgent
 from src.core.workflow_manager import WorkflowManager
