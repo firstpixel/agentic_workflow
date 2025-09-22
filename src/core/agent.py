@@ -6,7 +6,9 @@ from pathlib import Path
 import os
 import json
 
-import requests  # para Ollama default
+import requests
+
+from .utils import to_display  # para Ollama default
 
 from .types import Message, Result
 
@@ -182,7 +184,8 @@ class LLMAgent(BaseAgent):
     def run(self, message: Message) -> Result:
         prompt = self._build_prompt(message)
         text = self.llm_fn(prompt, **self.config.model_config)
-        res = Result.ok(output={"text": text}, display_output=text)
+        #res = Result.ok(output={"text": text}, display_output=text)
+        res = Result.ok(output={"text": text}, display_output=to_display(text))
         try:
             res.metrics["prompt_chars"] = len(prompt)
             res.metrics["output_chars"] = len(text or "")

@@ -2,11 +2,6 @@ import os
 from src.agents.prompt_switcher import PromptSwitcherAgent, PromptAgent  # Unified agent
 from src.agents.model_selector import ModelSelectorAgent  # Now we have the implementation
 from src.agents.approval_gate import ApprovalGateAgent
-from src.core.workflow_manager import WorkflowManager
-from src.core.agent import AgentConfig, LLMAgent
-from src.core.types import Result
-from src.agents.switch_agent import SwitchAgent
-from src.agents.critic_agent import CriticAgent
 
 # Um agente de eco simples para visualizar para onde roteamos
 from src.agents.echo import EchoAgent  # use o echo do exemplo do Task 1 (ou crie agora)
@@ -37,10 +32,136 @@ from src.agents.query_rewriter import QueryRewriterAgent
 from src.agents.guardrails_agent import GuardrailsAgent
 from src.eval.metrics import MetricsCollector  # <-- Add this import
 from src.eval.evaluation import EvalCase, EvaluationRunner  # <-- Add this import
+from src.core.utils import to_display  # <-- Add this import
+
+# Add import for get_event_bus
+from src.core.event_bus import get_event_bus
+
+
+from src.app.flows import (
+    make_prompt_handoff_flow,
+    make_guardrails_writer_flow,
+)
+
+def demo_eventbus():
+    """
+    Task 13 — EventBus + Settings
+    Fase 1: ApprovalGate publica uma 'solicitação' no EventBus
+    Subscriber simula a decisão humana e publica a decisão
+    Fase 2: Rodamos o ApprovalGate com a decisão publicada
+    """
+    model = os.getenv("OLLAMA_MODEL", "llama3")
+    bus = get_event_bus()
+
+    approval = ApprovalGateAgent(AgentConfig(
+        name="ApprovalGate",
+        model_config={
+            "summary_prompt_file": "approval_request.md",
+            "next_on_approve": "Writer",
+            "model": model,
+            "options": {"temperature": 0.1}
+        }
+    ))
+    writer = LLMAgent(AgentConfig(
+        name="Writer",
+        prompt_file="tech_writer.md",
+        model_config={"model": model, "options": {"temperature": 0.1}}
+    ))
+    agents = {"ApprovalGate": approval, "Writer": writer}
+    graph  = {"ApprovalGate": ["Writer"], "Writer": []}
+    wm = WorkflowManager(graph, agents)
+
+    # ---- Execução 1: solicita aprovação (PENDING) ----
+    content = {"text": "Draft: Add cross-platform analytics pipeline for funnels and retention."}
+    r1 = wm.run_workflow("ApprovalGate", content)
+    pending = next((r for r in r1 if isinstance(r.output, dict) and r.output.get("status") == "PENDING"), None)
+    if not pending:
+        print("No PENDING approval (unexpected).")
+        return
+    approval_id = pending.output.get("approval_id", "")
+    summary_md = pending.output.get("summary_md", "")
+
+    # Publica evento de request para qualquer consumidor humano/sistema externo
+    bus.publish("approval.request", {
+        "approval_id": approval_id,
+        "summary_md": summary_md,
+        "who": "ApprovalGate"
+    })
+    print(f"[bus] published approval.request for {approval_id}")
+
+    # Subscriber (simula humano): ao receber, publica decisão APPROVE
+    def _on_request(ch, payload):
+        aid = payload.get("approval_id")
+        print(f"[bus] received {ch} for {aid}, simulating APPROVE")
+        bus.publish(f"approval.decision.{aid}", {
+            "approval_id": aid,
+            "human_decision": "APPROVE",
+            "human_comment": "Looks good."
+        })
+    sub_id = bus.subscribe_once("approval.request", _on_request)
+
+    # Aguarda decisão (no mundo real, seria outro processo/UI)
+    decision = bus.wait_for(f"approval.decision.{approval_id}", lambda p: p.get("approval_id") == approval_id, timeout_sec=5.0)
+    if not decision:
+        print("[bus] no decision received (timeout).")
+        return
+
+    # ---- Execução 2: aplica decisão e segue para Writer ----
+    r2 = wm.run_workflow("ApprovalGate", decision)
+    print("\n=== TASK 13: EventBus Sample (HITL) ===")
+    for r in r2:
+        print("->", r.display_output or r.output)
+
+
+def demo_flows_sample():
+    """
+    Demonstra dois helpers de fluxo:
+      1) Prompt/Plan Handoff: PromptAgent -> Writer
+      2) Guardrails -> Writer
+    """
+    model = os.getenv("OLLAMA_MODEL", "llama3")
+
+    # 1) Prompt/Plan Handoff
+    fb1 = make_prompt_handoff_flow(model=model)
+    wm1 = fb1.manager()
+    print("\n=== TASK 12: Prompt/Plan Handoff (flows.py) ===")
+    r1 = wm1.run_workflow("PromptAgent", {"text": "Explain the API telemetry design. [[PARAGRAPH]]"})
+    for r in r1:
+        print("->", r.display_output or r.output)
+
+    # 2) Guardrails -> Writer
+    fb2 = make_guardrails_writer_flow(model=model)
+    wm2 = fb2.manager()
+    print("\n=== TASK 12: Guardrails -> Writer (flows.py) ===")
+    r2 = wm2.run_workflow("Guardrails", {"text": "Contact me at jane@company.com. Summarize design."})
+    for r in r2:
+        print("->", r.display_output or r.output)
+
+def demo_display_unwrap():
+    model = os.getenv("OLLAMA_MODEL", "llama3")
+
+    writer = LLMAgent(AgentConfig(
+        name="Writer",
+        prompt_file="writer_paragraph.md",  # Use existing prompt file
+        model_config={"model": model, "options": {"temperature": 0.0}}
+    ))
+
+    agents = {"Writer": writer}
+    graph = {"Writer": []}
+    wm = WorkflowManager(graph, agents)
+
+    data = {"text": "Write a summary about user analytics features."}
+    results = wm.run_workflow("Writer", data)
+
+    print("\n=== Display/Unwrap Sample ===")
+    for r in results:
+        raw = r.output.get("text") if isinstance(r.output, dict) else r.output
+        disp = r.display_output or to_display(None, raw)
+        print("RAW:\n", raw, "\n---\nDISPLAY:\n", disp, "\n")
 
 def demo_prompt_handoff():
     """
-    Task 10 — Prompt/Plan Handoff
+    Prompt/Plan Handoff
     Fluxo: PromptAgent -> Writer
       - PromptAgent decide o prompt do Writer (writer_bullets.md vs writer_paragraph.md)
       - PromptAgent também envia um 'plan_md' como payload por ramo
@@ -78,7 +199,7 @@ def demo_prompt_handoff():
 
     results = wm.run_workflow("PromptAgent", user_text)
 
-    print("\n=== TASK 10: Prompt/Plan Handoff Sample ===")
+    print("\n=== Prompt/Plan Handoff Sample ===")
     for r in results:
         print("->", r.display_output or r.output)
 
@@ -775,6 +896,12 @@ def main():
     demo_model_routing()  
     
     demo_prompt_overrides()
+    
+    demo_display_unwrap()
+    
+    demo_flows_sample()
+    
+    demo_eventbus()
 
 
 if __name__ == "__main__":
