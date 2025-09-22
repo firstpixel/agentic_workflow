@@ -118,7 +118,7 @@ def create_ollama_llm_agent() -> LLMAgent:
     config = AgentConfig(
         name="OllamaLLM",
         model_config={
-            "model": ollama_model or "llama3.2:latest"
+            "model": ollama_model or "llama3.2:1b"
         }
     )
     # Don't pass llm_fn - let it use the default Ollama integration

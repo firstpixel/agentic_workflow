@@ -1,5 +1,6 @@
 import os
-from agents.prompt_switcher import PromptSwitcherAgent
+from src.agents.prompt_switcher import PromptSwitcherAgent
+from src.agents.prompt_agent import PromptAgent  # <-- Add this import
 from src.agents.model_selector import ModelSelectorAgent  # Now we have the implementation
 from src.agents.approval_gate import ApprovalGateAgent
 from src.core.workflow_manager import WorkflowManager
@@ -38,6 +39,51 @@ from src.agents.guardrails_agent import GuardrailsAgent
 from src.eval.metrics import MetricsCollector  # <-- Add this import
 from src.eval.evaluation import EvalCase, EvaluationRunner  # <-- Add this import
 
+def demo_prompt_handoff():
+    """
+    Task 10 — Prompt/Plan Handoff
+    Fluxo: PromptAgent -> Writer
+      - PromptAgent decide o prompt do Writer (writer_bullets.md vs writer_paragraph.md)
+      - PromptAgent também envia um 'plan_md' como payload por ramo
+      - Writer usa {plan_md} no template .md
+    """
+    model = os.getenv("OLLAMA_MODEL", "llama3")
+
+    prompt_agent = PromptAgent(AgentConfig(
+        name="PromptAgent",
+        model_config={
+            "prompt_file": "prompt_agent.md",     # coloque este arquivo em prompts/
+            "model": model,
+            "options": {"temperature": 0.0},
+            "default_targets": {"Writer": "writer_bullets.md"}  # fallback quando o prompt não define TARGET
+        }
+    ))
+
+    # baseline do Writer (será override para writer_paragraph.md se [[PARAGRAPH]] ou regra escolher)
+    writer = LLMAgent(AgentConfig(
+        name="Writer",
+        prompt_file="writer_bullets.md",         # prompts/writer_bullets.md
+        model_config={"model": model, "options": {"temperature": 0.1}}
+    ))
+
+    agents = {"PromptAgent": prompt_agent, "Writer": writer}
+    graph  = {"PromptAgent": ["Writer"], "Writer": []}
+
+    wm = WorkflowManager(graph, agents)
+
+    user_text = {
+        # Use [[PARAGRAPH]] se o seu prompt_agent.md fizer seleção por token;
+        # caso contrário, ele pode escolher bullets/paragraph por heurística.
+        "text": "Outline analytics pipeline design for funnels and retention. [[PARAGRAPH]]"
+    }
+
+    results = wm.run_workflow("PromptAgent", user_text)
+
+    print("\n=== TASK 10: Prompt/Plan Handoff Sample ===")
+    for r in results:
+        print("->", r.display_output or r.output)
+
+    print("Writer prompt_file (effective):", writer.config.prompt_file)
 
 def demo_prompt_overrides():
     """

@@ -11,7 +11,7 @@ os.environ["PROMPT_DIR"] = "/Users/gilbeyruth/AIProjects/agentic_workflow/prompt
 
 # --- Ollama configuration ---
 ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:latest")
+ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 skip_reason_ollama = "Set OLLAMA_MODEL (e opcional OLLAMA_HOST) para rodar este teste."
 
 def create_ollama_llm_agent() -> LLMAgent:
@@ -19,7 +19,7 @@ def create_ollama_llm_agent() -> LLMAgent:
     config = AgentConfig(
         name="OllamaLLM",
         model_config={
-            "model": ollama_model or "llama3.2:latest"
+            "model": ollama_model or "llama3.2:1b"
         }
     )
     # Don't pass llm_fn - let it use the default Ollama integration

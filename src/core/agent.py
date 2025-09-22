@@ -157,6 +157,13 @@ class LLMAgent(BaseAgent):
             "critic_feedback": message.meta.get("critic_feedback", ""),
             "iteration": message.meta.get("iteration", 0),
             "message_text": self._extract_message_text(message),
+            # extras comuns para RAG/eval
+            "question": (message.data.get("question") if isinstance(message.data, dict) else ""),
+            "contexts_md": (message.data.get("contexts_md") if isinstance(message.data, dict) else ""),
+            "case_md": (message.data.get("case_md") if isinstance(message.data, dict) else ""),
+            "model_output_md": (message.data.get("model_output_md") if isinstance(message.data, dict) else ""),
+            "plan_md": (message.data.get("plan_md") if isinstance(message.data, dict) else "")
+
         }
         if isinstance(message.data, dict) and "previous" in message.data and "input" in message.data:
             ctx["root"] = message.data.get("input", ctx["root"])
@@ -171,10 +178,6 @@ class LLMAgent(BaseAgent):
             return tmpl.format_map(SafeDict(ctx))
         return ctx["message_text"] or str(message.data)
 
-    # def run(self, message: Message) -> Result:
-    #     prompt = self._build_prompt(message)
-    #     text = self.llm_fn(prompt, **self.config.model_config)
-    #     return Result.ok(output={"text": text}, display_output=text)
     
     def run(self, message: Message) -> Result:
         prompt = self._build_prompt(message)
