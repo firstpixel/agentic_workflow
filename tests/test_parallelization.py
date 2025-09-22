@@ -12,31 +12,12 @@ ollama_model = os.getenv("OLLAMA_MODEL", "")
 skip_reason_ollama = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run this test with real Ollama."
 
 @pytest.mark.skipif(not ollama_model, reason=skip_reason_ollama)
-def test_task4_parallelization_real_ollama(tmp_path, monkeypatch):
+def test_task4_parallelization_real_ollama():
     """
     Teste do padrão Paralelização (FanOut/Join) usando Ollama real.
-    - Cria prompts em diretório temporário e aponta PROMPT_DIR para lá.
-    - Usa LLMAgent (default -> Ollama).
+    - Uses existing prompt files from prompts/ directory.
+    - Uses LLMAgent (default -> Ollama).
     """
-    # Prompts temporários
-    prompts_dir = tmp_path / "prompts"
-    prompts_dir.mkdir(parents=True, exist_ok=True)
-    (prompts_dir / "tech_writer.md").write_text(
-        "You are a senior software engineer.\n"
-        "Produce a concise technical bullet list only.\n\nINPUT:\n{message_text}\n",
-        encoding="utf-8"
-    )
-    (prompts_dir / "biz_writer.md").write_text(
-        "You are a senior product manager.\n"
-        "Produce a concise business/impact bullet list only.\n\nINPUT:\n{message_text}\n",
-        encoding="utf-8"
-    )
-    (prompts_dir / "final_summarizer.md").write_text(
-        "You will receive joined intermediate results as text.\n"
-        "Write one short synthesis paragraph.\n\nJOINED INPUT:\n{message_text}\n",
-        encoding="utf-8"
-    )
-    monkeypatch.setenv("PROMPT_DIR", str(prompts_dir))
 
     model_cfg = {"model": ollama_model, "options": {"temperature": 0.1}}
 

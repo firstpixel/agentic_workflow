@@ -162,6 +162,10 @@ class LLMAgent(BaseAgent):
             ctx["root"] = message.data.get("input", ctx["root"])
             ctx["previous"] = message.data.get("previous", "")
 
+        # Include all keys from message.data in the context for template formatting
+        if isinstance(message.data, dict):
+            ctx.update(message.data)
+
         tmpl = load_prompt_text(self.config.prompt_file)
         if tmpl:
             return tmpl.format_map(SafeDict(ctx))

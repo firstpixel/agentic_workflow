@@ -1,4 +1,5 @@
 import os
+from src.agents.approval_gate import ApprovalGateAgent
 from src.core.workflow_manager import WorkflowManager
 from src.core.agent import AgentConfig
 from src.agents.echo import EchoAgent
@@ -32,6 +33,291 @@ from src.agents.echo import EchoAgent  # use o echo do exemplo do Task 1 (ou cri
 from src.agents.fanout_agent import FanOutAgent
 from src.agents.join_agent import JoinAgent
 
+from src.memory import MongoSTM, QdrantVectorStore, MemoryManager
+from src.agents.rag_retriever import RAGRetrieverAgent
+from src.agents.query_rewriter import QueryRewriterAgent
+from src.agents.guardrails_agent import GuardrailsAgent
+from src.eval.metrics import MetricsCollector  # <-- Add this import
+from src.eval.evaluation import EvalCase, EvaluationRunner  # <-- Add this import
+
+def demo_metrics_eval():
+    """
+    Exemplo: Writer -> (final) com métricas + avaliação.
+    - Prompt do Writer carregado de arquivo .md (tech_writer.md).
+    - Juiz por regex (determinístico) e exemplo de juiz LLM (eval_judge.md).
+    """
+    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model_cfg = {"model": model, "options": {"temperature": 0.1}}
+
+    writer = LLMAgent(AgentConfig(
+        name="Writer",
+        prompt_file="tech_writer.md",
+        model_config=model_cfg
+    ))
+
+    agents = {"Writer": writer}
+    graph  = {"Writer": []}
+
+    metrics = MetricsCollector()
+    wm = WorkflowManager(graph, agents, metrics=metrics)
+
+    # Executa um caso simples
+    cases = [
+        EvalCase(
+            case_id="c1",
+            entry_node="Writer",
+            input_data={"text": "Design a telemetry module for API request timing and error rates."},
+            required_regex=r"(api|request|error|telemetry)"
+        )
+    ]
+    runner = EvaluationRunner(wm, metrics)
+
+    # Julgamento determinístico (regex)
+    results = runner.run(cases, judge="regex")
+    print("\n=== Eval (regex) ===")
+    for r in results:
+        print(r)
+
+    # (Opcional) Juiz LLM com prompt .md (eval_judge.md)
+    judge_llm_cfg = {"model": model, "options": {"temperature": 0.1}}
+    results_llm = runner.run(cases, judge="llm", llm_model_cfg=judge_llm_cfg, judge_prompt_file="eval_judge.md")
+    print("\n=== Eval (LLM) ===")
+    for r in results_llm:
+        print(r)
+
+    print("\n=== Metrics Summary ===")
+    print(metrics.summary())
+    print("\nCSV:\n", metrics.to_csv())
+
+def demo_human_in_the_loop():
+    """
+    Padrão HITL em duas chamadas:
+      1) ApprovalGate (request) -> HALT com resumo para humano
+      2) ApprovalGate (decision=APPROVE) -> segue para Writer
+    """
+    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model_cfg = {"model": model, "options": {"temperature": 0.1}}
+
+    # Gate de aprovação
+    approval = ApprovalGateAgent(AgentConfig(
+        name="ApprovalGate",
+        model_config={
+            "summary_prompt_file": "approval_request.md",
+            "next_on_approve": "Writer",
+            "next_on_reject": "Rework",    # opcional
+            "model": model,
+            "options": {"temperature": 0.1}
+        }
+    ))
+
+    # Writer (pós-aprovação) – usa prompt .md existente; por ex., tech_writer.md
+    writer = LLMAgent(AgentConfig(
+        name="Writer",
+        prompt_file="tech_writer.md",
+        model_config=model_cfg
+    ))
+
+    agents = {"ApprovalGate": approval, "Writer": writer}
+    graph  = {"ApprovalGate": ["Writer"], "Writer": []}
+
+    wm = WorkflowManager(graph, agents)
+
+    # ---- Execução 1: solicita aprovação (HALT) ----
+    content = {
+        "text": "Draft: We will add a cross-platform analytics pipeline for funnels and retention."
+    }
+    r1 = wm.run_workflow("ApprovalGate", content)
+    print("\n=== HITL Sample – Request ===")
+    for r in r1:
+        print("->", r.display_output or r.output)
+
+    # Get the approval_id from the pending request
+    approval_id = ""
+    summary_content = ""
+    for r in r1[::-1]:
+        if isinstance(r.output, dict) and r.output.get("status") == "PENDING":
+            approval_id = r.output.get("approval_id","")
+            summary_content = r.output.get("summary_md", "")
+            break
+
+    if not approval_id:
+        print("❌ No approval_id found in workflow results")
+        return
+
+    # Display the summary for human review
+    print("\n" + "="*60)
+    print("🧑‍⚖️ HUMAN APPROVAL REQUIRED")
+    print("="*60)
+    print("📋 SUMMARY:")
+    print(summary_content)
+    print("\n" + "-"*60)
+    
+    # Prompt user for decision
+    while True:
+        print("\n🤔 Do you approve this request?")
+        print("   1. APPROVE - Continue with the writer")
+        print("   2. REJECT - Stop the workflow")
+        print("   3. Exit demo")
+        
+        choice = input("\nEnter your choice (1/2/3): ").strip()
+        
+        if choice == "1":
+            human_decision = "APPROVE"
+            human_comment = input("Optional comment (press Enter to skip): ").strip() or "Approved by user"
+            break
+        elif choice == "2":
+            human_decision = "REJECT"
+            human_comment = input("Reason for rejection (press Enter to skip): ").strip() or "Rejected by user"
+            break
+        elif choice == "3":
+            print("👋 Exiting HITL demo...")
+            return
+        else:
+            print("❌ Invalid choice. Please enter 1, 2, or 3.")
+
+    decision_payload = {
+        "approval_id": approval_id,
+        "human_decision": human_decision,
+        "human_comment": human_comment
+    }
+
+    # ---- Execução 2: aplica decisão e segue para Writer ----
+    print(f"\n=== HITL Sample – Decision ({human_decision}) ===")
+    r2 = wm.run_workflow("ApprovalGate", decision_payload)
+    for r in r2:
+        print("->", r.display_output or r.output)
+
+def demo_guardrails():
+    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model_cfg = {"model": model, "options": {"temperature": 0.1}}
+
+    guard = GuardrailsAgent(AgentConfig(
+        name="Guardrails",
+        model_config={
+            "pii_redact": True,
+            "moderation_mode": "hybrid",           # "deterministic" | "llm" | "hybrid"
+            "moderation_prompt_file": "moderation.md",
+            "model": model,
+            "options": {"temperature": 0.0}
+        }
+    ))
+
+    writer = LLMAgent(AgentConfig(
+        name="Writer",
+        prompt_file="tech_writer.md",             # reusa seu prompt de Task 4
+        model_config=model_cfg
+    ))
+
+    agents = {"Guardrails": guard, "Writer": writer}
+    graph  = {"Guardrails": ["Writer"], "Writer": []}
+
+    wm = WorkflowManager(graph, agents)
+
+    user_text = {
+        "text": "My email is john.doe@example.com and phone +1 (555) 123-4567. Please outline the technical plan."
+    }
+    results = wm.run_workflow("Guardrails", user_text)
+
+    print("\n=== Guardrails Sample ===")
+    for r in results:
+        print("->", r.display_output or r.output)
+
+def demo_query_rewriter():
+    """
+    Sample do QueryRewriter em fluxo:
+    QueryRewriter -> (Retriever) -> Answerer
+    """
+    model = os.getenv("OLLAMA_MODEL", "llama3")
+    model_cfg = {"model": model, "options": {"temperature": 0.1}, "prompt_file": "query_rewriter.md"}
+
+    # Rewriter (usa prompt .md)
+    rewriter = QueryRewriterAgent(AgentConfig(name="QueryRewriter", model_config=model_cfg))
+
+    # Se quiser ligar o pipeline completo com RAG (ajuste seus imports conforme sua base):
+    stm = MongoSTM()
+    ltm = QdrantVectorStore(collection="agentic_docs")
+    memory = MemoryManager(stm, ltm)
+    retriever = RAGRetrieverAgent(AgentConfig(name="Retriever", model_config={"top_k":3}), memory)
+
+    # Answerer com prompt de contexto (já usado no Task 5)
+    answer_model_cfg = {"model": model, "options": {"temperature": 0.1}}
+    answerer = LLMAgent(AgentConfig(name="Answerer", prompt_file="answer_with_context.md", model_config=answer_model_cfg))
+
+    agents = {
+        "QueryRewriter": rewriter,
+        "Retriever": retriever,
+        "Answerer": answerer
+    }
+
+    # Grafo completo: Rewriter -> Retriever -> Answerer
+    graph = {
+        "QueryRewriter": ["Retriever"],
+        "Retriever": ["Answerer"],
+        "Answerer": []
+    }
+
+    wm = WorkflowManager(graph, agents)
+
+    user_question = {
+        "question": "How do we track cross-platform user journeys for funnel analysis?",
+        "hints_md": "- product: analytics\n- platforms: web, mobile\n- focus: funnel events"
+    }
+
+    # Exec: the workflow now properly chains Rewriter -> Retriever -> Answerer
+    # We need to ensure the original question is preserved for the Answerer
+    results = wm.run_workflow("QueryRewriter", user_question)
+
+    print("\n=== QueryRewriter Sample ===")
+    for i, r in enumerate(results):
+        print(f"Step {i+1}: ->", r.display_output or str(r.output)[:100] + "...")
+
+def demo_rag_memory():
+    """
+    Indexa alguns documentos no Qdrant, grava STM no Mongo,
+    recupera contexto e responde com base no prompt markdown.
+    Requer:
+      - QDRANT_URL
+      - MONGODB_URI
+      - OLLAMA_MODEL (e opcional OLLAMA_HOST)
+    """
+    model = os.getenv("OLLAMA_MODEL","llama3")
+    model_cfg = {"model": model, "options": {"temperature": 0.1}}
+
+    # --- Memória: STM (Mongo) + LTM/RAG (Qdrant)
+    stm = MongoSTM()  # usa MONGODB_URI
+    ltm = QdrantVectorStore(collection="agentic_docs")
+    memory = MemoryManager(stm, ltm)
+
+    # Indexação de exemplo
+    memory.index_document("Our product tracks user journeys across web and mobile to identify friction points.", meta={"tag":"C1"})
+    memory.index_document("Analytics events include page views, taps, and custom milestones with timestamps.", meta={"tag":"C2"})
+    memory.index_document("Dashboards show funnels, retention curves, and cohort analysis.", meta={"tag":"C3"})
+
+    session_id="demo-session"
+    memory.stm_add(session_id,"user","How do we capture events for funnel analysis?")
+
+    # --- Agentes
+    retriever = RAGRetrieverAgent(AgentConfig(name="Retriever", model_config={"top_k":3}), memory)
+    answerer  = LLMAgent(AgentConfig(name="Answerer", prompt_file="answer_with_context.md", model_config=model_cfg))
+
+    agents = {"Retriever": retriever, "Answerer": answerer}
+    graph  = {"Retriever": ["Answerer"], "Answerer": []}
+
+    wm = WorkflowManager(graph, agents)
+
+    # A pergunta entra e vira {question} no prompt do Answerer
+    question = {"query": "How are analytics events captured for funnels?"}
+    # EXEC 1: Retriever
+    r1 = wm.run_workflow("Retriever", question)
+    # Pega contexts_md do último result do Retriever
+    ctx_md = r1[-1].output.get("contexts_md","")
+
+    # EXEC 2: Answerer usando o contexto recuperado
+    r2 = wm.run_workflow("Answerer", {"question":"How are analytics events captured for funnels?", "contexts_md": ctx_md})
+
+    print("\n=== RAG & Memory Sample ===")
+    for r in r1+r2:
+        print("->", r.display_output or r.output)
 
 def demo_parallelization():
     """
@@ -84,7 +370,7 @@ def demo_parallelization():
     }
     results = wm.run_workflow("FanOut", user_input)
 
-    print("\n=== TASK 4: Parallelization Sample ===")
+    print("\n=== Parallelization Sample ===")
     for r in results:
         print("->", r.display_output or r.output)
 
@@ -126,17 +412,7 @@ def check_ollama_availability(model: str = "llama3.2:latest", timeout: int = 5) 
         return False
 
 
-def main():
-    print("🚀 Running Agentic Workflow Examples\n")
-    
-    # Run SwitchAgent routing examples
-    demo_switch_agent_routing()
-    
-    # Run CriticAgent evaluation examples  
-    demo_critic_agent_evaluation()
-    
-    
-    demo_parallelization()
+
 
 
 def demo_switch_agent_routing():
@@ -297,6 +573,27 @@ def demo_critic_agent_evaluation():
             
     except Exception as e:
         print(f"\n❌ Error in critic workflow: {e}")
+        
+def main():
+    print("🚀 Running Agentic Workflow Examples\n")
+    
+    # Run SwitchAgent routing examples
+    demo_switch_agent_routing()
+    
+    # Run CriticAgent evaluation examples  
+    demo_critic_agent_evaluation()
+    
+    demo_parallelization()
+
+    demo_rag_memory()
+
+    demo_query_rewriter()
+    
+    demo_guardrails()
+    
+    demo_human_in_the_loop()
+
+    demo_metrics_eval()
 
 
 if __name__ == "__main__":

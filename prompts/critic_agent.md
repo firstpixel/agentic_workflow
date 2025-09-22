@@ -1,29 +1,22 @@
-# Content Evaluation
+You are a meticulous reviewer. Evaluate the TEXT using the RUBRIC.
+Return **only** Markdown with the following sections and exact headings:
 
-You are a meticulous reviewer. Evaluate the TEXT below using the provided RUBRIC criteria.
+### DECISION
+PASS or REVISE
 
-**IMPORTANT**: Respond in simple markdown format, NOT JSON. Use this exact structure:
+### SCORE
+A single number from 0 to 10
 
-## Overall Score
+### REASONS
+- short bullet 1
+- short bullet 2
 
-[0-10 number]
+### SUGGESTIONS
+- short actionable suggestion 1
+- short actionable suggestion 2
 
-## Detailed Scores
+RUBRIC:
+{rubric_json}
 
-- [Criterion 1]: [0-10 score]
-- [Criterion 2]: [0-10 score]  
-- [Criterion 3]: [0-10 score]
-
-## Reasons
-
-- [Brief reason 1]
-- [Brief reason 2]
-- [Brief reason 3]
-
-**Evaluation Criteria:**
-{rubric_text}
-
-**Text to Evaluate:**
+TEXT:
 {text}
-
-Please be thorough but concise in your evaluation.

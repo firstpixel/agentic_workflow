@@ -15,35 +15,22 @@ ollama_model = os.getenv("OLLAMA_MODEL", "")
 skip_reason_ollama = "Set OLLAMA_MODEL (e opcional OLLAMA_HOST) para rodar este teste."
 
 
-# --- helpers para preparar PROMPT_DIR temporário ---
+# --- helpers para configurar PROMPT_DIR ---
 @pytest.fixture(scope="module")
-def tmp_prompts(tmp_path_factory):
-    d = tmp_path_factory.mktemp("prompts")
-    (d / "critic_agent.md").write_text(
-        '# Content Evaluation\n\n'
-        'You are a meticulous reviewer. Evaluate the TEXT below using the provided RUBRIC criteria.\n\n'
-        '**IMPORTANT**: Respond in simple markdown format, NOT JSON. Use this exact structure:\n\n'
-        '## Overall Score\n\n'
-        '[0-10 number]\n\n'
-        '## Detailed Scores\n\n'
-        '- [Criterion 1]: [0-10 score]\n\n'
-        '## Reasons\n\n'
-        '- [Brief reason 1]\n\n'
-        '**Evaluation Criteria:**\n{rubric_text}\n\n'
-        '**Text to Evaluate:**\n{text}\n\n'
-        'Please be thorough but concise in your evaluation.',
-        encoding="utf-8"
-    )
-    os.environ["PROMPT_DIR"] = str(d)
-    return d
+def setup_prompts():
+    # Use the actual prompts folder
+    import pathlib
+    prompts_dir = pathlib.Path(__file__).parent.parent / "prompts"
+    os.environ["PROMPT_DIR"] = str(prompts_dir)
+    return prompts_dir
 
 
 # --- dummies de LLM para o crítico ---
 def critic_llm_low(prompt: str, **kwargs) -> str:
-    return "## Overall Score\n\n4.0\n\n## Detailed Scores\n\n- A: 4.0\n\n## Reasons\n\n- Too short"
+    return "### DECISION\nREVISE\n\n### SCORE\n4.0\n\n### REASONS\n- Too short\n\n### SUGGESTIONS\n- Add more content"
 
 def critic_llm_high(prompt: str, **kwargs) -> str:
-    return "## Overall Score\n\n9.0\n\n## Detailed Scores\n\n- A: 9.0\n\n## Reasons\n\n- Good content"
+    return "### DECISION\nPASS\n\n### SCORE\n9.0\n\n### REASONS\n- Good content\n\n### SUGGESTIONS\n- No changes needed"
 
 def critic_llm_invalid_markdown(prompt: str, **kwargs) -> str:
     return "INVALID_MARKDOWN_FORMAT << " + prompt[:30]
@@ -62,7 +49,7 @@ class DoneAgent(BaseAgent):
 
 # ------------------ TESTES ----------------------
 
-def test_critic_repeat_on_low_score(tmp_prompts):
+def test_critic_repeat_on_low_score(setup_prompts):
     critic = CriticAgent(AgentConfig(
         name="Critic",
         model_config={
@@ -77,7 +64,7 @@ def test_critic_repeat_on_low_score(tmp_prompts):
     assert res.output["score"] < 7.5
 
 
-def test_critic_goto_on_pass(tmp_prompts):
+def test_critic_goto_on_pass(setup_prompts):
     critic = CriticAgent(AgentConfig(
         name="Critic",
         model_config={
@@ -92,7 +79,7 @@ def test_critic_goto_on_pass(tmp_prompts):
     assert res.output["score"] >= 7.5
 
 
-def test_critic_invalid_markdown_triggers_repeat(tmp_prompts):
+def test_critic_invalid_markdown_triggers_repeat(setup_prompts):
     critic = CriticAgent(AgentConfig(
         name="Critic",
         model_config={
@@ -106,7 +93,7 @@ def test_critic_invalid_markdown_triggers_repeat(tmp_prompts):
     assert res.control.get("repeat") is True
 
 
-def test_integration_writer_critic_flow(tmp_prompts):
+def test_integration_writer_critic_flow(setup_prompts):
     writer = LLMAgent(AgentConfig(name="Writer", prompt_file=None), llm_fn=writer_llm)
     critic = CriticAgent(AgentConfig(
         name="Critic",
@@ -139,7 +126,7 @@ def create_ollama_llm_agent() -> LLMAgent:
 
 # --- Test with real Ollama ---
 @pytest.mark.skipif(not ollama_model, reason=skip_reason_ollama)
-def test_critic_agent_with_ollama(tmp_prompts):
+def test_critic_agent_with_ollama(setup_prompts):
     """Test CriticAgent using LLMAgent with real Ollama integration."""
     
     # Create LLMAgent that uses real Ollama
@@ -165,14 +152,17 @@ def test_critic_agent_with_ollama(tmp_prompts):
     assert res.success, f"CriticAgent with Ollama failed: {res.output}"
     assert isinstance(res.output, dict)
     assert "score" in res.output
-    assert "passed" in res.output
-    assert "reasons" in res.output
+    assert "decision" in res.output
+    assert "rubric" in res.output
     
     # Check that we got a reasonable score (should be a number between 0-10)
     score = res.output["score"]
     assert isinstance(score, (int, float))
     assert 0 <= score <= 10
     
-    print(f"✅ Ollama CriticAgent test passed with score: {score}")
-    print(f"   Reasons: {res.output.get('reasons', [])}")
+    # Check decision is valid
+    decision = res.output["decision"]
+    assert decision in ["PASS", "REVISE"]
+    
+    print(f"✅ Ollama CriticAgent test passed with score: {score}, decision: {decision}")
     print(f"   Display: {res.display_output}")
