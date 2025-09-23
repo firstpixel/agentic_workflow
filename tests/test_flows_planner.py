@@ -13,7 +13,7 @@ def test_planner_flow_end_to_end():
         retry_limit=2,
         planner_model_config={
             "executor_agent": "Executor", 
-            "model": os.getenv("OLLAMA_MODEL", "gemma2:2b"),
+            "model": os.getenv("OLLAMA_MODEL", "gemma3:latest"),
             "options": {"temperature": 0.1}
         }
     )
@@ -26,7 +26,7 @@ def test_planner_flow_end_to_end():
     print("="*60)
     
     results = wm.run_workflow("Planner", {
-        "request": "Create a simple Python script that reads a CSV file and prints the first 5 rows"
+        "request": "Build a React page that loads ArXiv papers from their API and displays titles, authors, abstracts.\nAPI: https://export.arxiv.org/api/query?search_query=all:csai&start=0&max_results=10"
     })
 
     # ---- Print results for debugging ----

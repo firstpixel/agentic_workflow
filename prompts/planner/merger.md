@@ -1,6 +1,6 @@
 # Planner • Merger
 
-You receive detailed task blocks and dependencies. Produce the final ordered plan (no cycles), milestones, and critical path. Use the actual task data provided.
+You receive detailed task blocks and dependencies. Produce the final ordered plan (no cycles), milestones, and critical path. Use the actual task data provided. Do not add commentaries, use the structure bellow.
 
 Inputs:
 - Ordered IDs: {ordered_ids}

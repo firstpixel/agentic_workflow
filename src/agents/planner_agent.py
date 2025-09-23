@@ -30,7 +30,7 @@ _CRITICAL_PATH   = _section(r"CRITICAL\s+PATH")
 _REFINEMENT_RES  = _section(r"REFINEMENT\s+RESULT\s*\(.*?\)")
 
 _BULLET_TASK = re.compile(r"^\s*(?:-\s*|#{1,6}\s*)\[(?P<id>[A-Za-z0-9_.\-]+)\]\s+(?P<title>.+?)\s*$", re.MULTILINE)
-_DEP_EDGE    = re.compile(r"^\s*(?P<to>[A-Za-z0-9_.\-]+)\s*<-\s*(?P<frm>[A-Za-z0-9_.\-]+)\s*$", re.MULTILINE)
+_DEP_EDGE = re.compile(r"^\s*(?P<to>[A-Za-z0-9_.\-]+)\s*<-\s*(?P<frm>[A-Za-z0-9_.\-,\s]+)\s*$", re.MULTILINE)
 
 _REPLACED_LINE = re.compile(r"^\s*Replaced\s*:\s*(?P<id>[A-Za-z0-9_.\-]+)\s*$", re.IGNORECASE | re.MULTILINE)
 _NEW_LINE      = re.compile(r"^\s*New\s*:\s*(?P<ids>.+?)\s*$", re.IGNORECASE | re.MULTILINE)
@@ -66,7 +66,13 @@ def _parse_deps(md: str) -> List[Tuple[str, str]]:
     body = body_m.group("body")
     edges = []
     for m in _DEP_EDGE.finditer(body):
-        edges.append((m.group("frm").strip(), m.group("to").strip()))
+        to = m.group("to").strip()
+        frm_list = m.group("frm").strip()
+        # Handle multiple dependencies separated by commas
+        for frm in frm_list.split(','):
+            frm = frm.strip()
+            if frm:  # Skip empty strings
+                edges.append((frm, to))
     return edges
 
 
@@ -148,29 +154,54 @@ class PlannerAgent(BaseAgent):
             print(f"    {k}: {str(v)[:200]}{'...' if len(str(v)) > 200 else ''}")
         
         prompt_file = self.STAGE_FILES[stage]
+        print(f"🔍 [DEBUG] Prompt file: {prompt_file}")
+        
         # Stage agent reuses Ollama config; can override per stage
         mc = dict(self.config.model_config or {})
         so = (mc.get("stage_overrides") or {}).get(stage) or {}
         mc.update(so)
+        print(f"🔍 [DEBUG] Model config: {mc}")
 
         stage_agent = LLMAgent(AgentConfig(
             name=f"Planner::{stage}",
             prompt_file=prompt_file,
             model_config=mc
         ))
-        # We pass a single text blob; the prompt file uses placeholders
-        text_blob = "\n".join(f"{k}: {v}" for k, v in vars.items())
         
-        print(f"🔍 [DEBUG] Sending to LLM for {stage}:")
-        print(f"    text_blob: {text_blob[:300]}{'...' if len(text_blob) > 300 else ''}")
+        # Debug: Check prompt template
+        try:
+            prompt_template = load_prompt_text(prompt_file)
+            print(f"🔍 [DEBUG] Prompt template loaded: {len(prompt_template)} chars")
+            print(f"🔍 [DEBUG] Template preview: {prompt_template[:300]}{'...' if len(prompt_template) > 300 else ''}")
+        except Exception as e:
+            print(f"❌ [DEBUG] Error loading prompt template: {e}")
         
-        res = stage_agent.execute(Message(data={"text": text_blob}))
-        output = (res.output.get("text") or "").strip()
+        # We pass data that will be used for template formatting
+        message_data = dict(vars)
+        message_data["text"] = "\n".join(f"{k}: {v}" for k, v in vars.items())
         
-        print(f"🔍 [DEBUG] LLM response for {stage}:")
-        print(f"    output: {output[:300]}{'...' if len(output) > 300 else ''}")
+        print(f"🔍 [DEBUG] Message data keys: {list(message_data.keys())}")
+        print(f"🔍 [DEBUG] Sending message to stage agent...")
+        
+        try:
+            res = stage_agent.run(Message(data=message_data))
+            print(f"🔍 [DEBUG] Stage agent run result:")
+            print(f"    success: {res.success}")
+            print(f"    output keys: {list(res.output.keys()) if isinstance(res.output, dict) else 'not dict'}")
+            if res.success:
+                output = (res.output.get("text") or "").strip()
+                print(f"🔍 [DEBUG] LLM response for {stage} ({len(output)} chars):")
+                print(f"    output: {output[:500]}{'...' if len(output) > 500 else ''}")
+            else:
+                print(f"❌ [DEBUG] Stage failed: {res}")
+                output = ""
+        except Exception as e:
+            print(f"❌ [DEBUG] Exception in stage {stage}: {e}")
+            import traceback
+            traceback.print_exc()
+            output = ""
+        
         print(f"🔍 [DEBUG] Completed stage: {stage}\n")
-        
         return output
 
     # ---------- main run ----------
@@ -193,10 +224,44 @@ class PlannerAgent(BaseAgent):
         # 1) Decompose
         print(f"\n📋 [DEBUG] Step 1: Decomposing...")
         md_decomp = self._call_stage("decomposer", {"request": text})
+        print(f"📋 [DEBUG] Raw decomposer output ({len(md_decomp)} chars): {md_decomp[:500]}{'...' if len(md_decomp) > 500 else ''}")
+        
         draft_tasks = _parse_tasks(md_decomp)
         deps = _parse_deps(md_decomp)
         print(f"📋 [DEBUG] Parsed {len(draft_tasks)} tasks: {[f'{t}:{title[:30]}' for t, title in draft_tasks]}")
         print(f"📋 [DEBUG] Parsed {len(deps)} dependencies: {deps}")
+        
+        # Debug parsing
+        if len(draft_tasks) == 0:
+            print(f"❌ [DEBUG] No tasks parsed! Checking regex...")
+            body_m = _DRAFT_TASKS.search(md_decomp)
+            if body_m:
+                body = body_m.group("body")
+                print(f"📋 [DEBUG] Found DRAFT TASKS section: {body[:200]}...")
+                import re
+                matches = list(_BULLET_TASK.finditer(body))
+                print(f"📋 [DEBUG] Bullet task matches: {len(matches)}")
+                for i, m in enumerate(matches[:3]):
+                    print(f"    Match {i}: '{m.group(0)}' -> id='{m.group('id')}', title='{m.group('title')}'")
+            else:
+                print(f"❌ [DEBUG] No DRAFT TASKS section found in output!")
+                print(f"📋 [DEBUG] Looking for pattern: {_DRAFT_TASKS.pattern}")
+        
+        if len(deps) == 0 and "DEPENDENCIES" in md_decomp:
+            print(f"❌ [DEBUG] No dependencies parsed but section exists!")
+            body_m = _DEPENDENCIES.search(md_decomp)
+            if body_m:
+                body = body_m.group("body")
+                print(f"📋 [DEBUG] Dependencies section: {body[:200]}...")
+                matches = list(_DEP_EDGE.finditer(body))
+                print(f"📋 [DEBUG] Dependency matches: {len(matches)}")
+                for i, m in enumerate(matches[:3]):
+                    print(f"    Match {i}: '{m.group(0)}' -> from='{m.group('frm')}', to='{m.group('to')}'")
+        
+        if len(draft_tasks) == 0:
+            print(f"❌ [DEBUG] Critical error: No tasks found, cannot continue!")
+            return Result.fail(output={"error": "No tasks could be parsed from decomposer output"}, 
+                             display_output="❌ Planner: No tasks found")
 
         # 2) Summarize
         print(f"\n📝 [DEBUG] Step 2: Summarizing...")
@@ -269,7 +334,9 @@ class PlannerAgent(BaseAgent):
         print(f"🏁 [DEBUG] PlannerAgent.run() completed successfully!")
         print(f"🏁 [DEBUG] Output keys: {list(out.keys())}")
         print(f"🏁 [DEBUG] Display: {disp}")
-        return Result.ok(output=out, display_output=disp)
+        
+        # Add explicit routing to Updater
+        return Result.ok(output=out, display_output=disp, control={"goto": "Updater"})
 
     # ---------- refinement ----------
 
