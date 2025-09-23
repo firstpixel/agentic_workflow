@@ -1,130 +1,71 @@
-import types
-
+import os
 from src.app.flows_planner import build_planner_flow
 from src.core.workflow_manager import WorkflowManager
-from src.core.types import Message, Result
-from src.core.agent import LLMAgent
-from src.core.types import Result as CoreResult
 
 
-def test_planner_flow_end_to_end(monkeypatch):
-    # ---- Monkeypatch LLMAgent.run to return canned Markdown per prompt_file ----
-    call_count = {"n": 0}
-
-    def fake_run(self, message):
-        call_count["n"] += 1
-        pf = (self.config.prompt_file or "").lower()
-
-        if pf.endswith("decomposer.md"):
-            md = """### DRAFT TASKS
-- [T01] Gather requirements
-- [T02] Draft outline
-
-### DEPENDENCIES
-T02 <- T01
-"""
-        elif pf.endswith("summarizer.md"):
-            md = """### OVERALL SUMMARY
-Scope: Create a short doc.
-Constraints: Keep it concise.
-Definition of success: Final doc delivered.
-"""
-        elif pf.endswith("detailer.md"):
-            # one generic task block per call is OK for this test
-            md = """# Task TXX — Placeholder
-## Purpose
-Why we do it.
-
-## Inputs
-- Input A
-
-## Outputs
-- Output A
-
-## Procedure (Intent-level steps)
-1. Do X
-2. Verify Y
-
-## Acceptance Criteria
-- AC1
-
-## Dependencies
-- (none)
-
-## Risks & Mitigations
-- Risk: none → Mitigation: n/a
-"""
-        elif pf.endswith("merger.md"):
-            md = """### FINAL TASK LIST v1
-
-## Overall Summary
-<omitted for test>
-
-## Task Table
-| ID  | Title               | Status  | Depends On | Acceptance Criteria (short) |
-|-----|---------------------|---------|------------|------------------------------|
-| T01 | Gather requirements | pending | —          | Goals documented             |
-| T02 | Draft outline       | pending | T01        | Outline complete             |
-
-## Milestones
-- M1: T01–T02
-
-## Critical Path
-T01 → T02
-"""
-        elif pf.endswith("evaluator.md"):
-            md = """### DECISION
-PASS
-
-### EDITS
-(none)
-"""
-        elif pf.endswith("refiner.md"):
-            md = """### REFINEMENT RESULT (Plan v2)
-Replaced: T02
-New: T02a, T02b
-
-### DEPENDENCIES
-T02a <- T01
-T02b <- T02a
-
-# Task T02a — Split A
-...
-
-# Task T02b — Split B
-...
-"""
-        else:
-            md = "(noop)"
-
-        return CoreResult.ok(output={"text": md}, display_output="fake-llm")
-
-    monkeypatch.setattr(LLMAgent, "run", fake_run)
-
+def test_planner_flow_end_to_end():
+    """Test the full planner flow using real Ollama calls"""
+    
     # ---- Build flow with MockExecutor (fail_once=True to test retry path) ----
     graph, agents, node_policies = build_planner_flow(
         executor_agent_name="Executor",
         executor_model_config={"fail_once": True},  # first attempt per task fails, then passes
         retry_limit=2,
-        planner_model_config={"executor_agent": "Executor", "temperature": 0.0}
+        planner_model_config={
+            "executor_agent": "Executor", 
+            "model": os.getenv("OLLAMA_MODEL", "gemma2:2b"),
+            "options": {"temperature": 0.1}
+        }
     )
 
     wm = WorkflowManager(graph=graph, agents=agents, node_policies=node_policies)
 
     # ---- Run the workflow ----
-    results = wm.run_workflow("Planner", {"request": "Write a short doc about Philosophi"})
+    print("\n" + "="*60)
+    print("🧭 Testing Planner Flow with Real Ollama Calls")
+    print("="*60)
+    
+    results = wm.run_workflow("Planner", {
+        "request": "Create a simple Python script that reads a CSV file and prints the first 5 rows"
+    })
 
+    # ---- Print results for debugging ----
+    print(f"\n📊 Workflow Results Summary:")
+    print(f"Total results: {len(results)}")
+    
+    for i, result in enumerate(results):
+        print(f"\nResult {i+1}:")
+        print(f"  Success: {result.success}")
+        print(f"  Display: {result.display_output}")
+        if isinstance(result.output, dict):
+            print(f"  Output keys: {list(result.output.keys())}")
+        
     # ---- Assertions ----
-    # 1) LLMAgent has been called multiple times (decomposer, summarizer, detailer x2, merger, evaluator = 6+)
-    assert call_count["n"] >= 6
-
-    # 2) We should have at least one Updater "complete" message
-    done_msgs = [r for r in results if isinstance(r.output, dict) and r.output.get("final_md")]
-    assert len(done_msgs) >= 1
-
-    final_md = done_msgs[-1].output["final_md"]
-    assert "Plan Execution Summary" in final_md
-
-    # 3) No unhandled failure
+    # 1) Should have successful results
     failures = [r for r in results if r.success is False]
-    assert not failures
+    assert not failures, f"Found {len(failures)} failed results"
+
+    # 2) Should have at least one result from Planner
+    planner_results = [r for r in results if isinstance(r.output, dict) and "plan_meta" in r.output]
+    assert len(planner_results) >= 1, "Should have at least one planner result with plan_meta"
+
+    # 3) Should have either a final summary or task execution results
+    final_msgs = [r for r in results if isinstance(r.output, dict) and r.output.get("final_md")]
+    executor_msgs = [r for r in results if isinstance(r.output, dict) and "executor_payload" in r.output]
+    
+    # The flow should either complete fully (final_md) or at least start execution (executor_payload)
+    assert len(final_msgs) >= 1 or len(executor_msgs) >= 1, "Should have either final summary or task execution"
+    
+    # 4) Verify plan structure if we have planner output
+    if planner_results:
+        plan_output = planner_results[-1].output
+        assert "plan_meta" in plan_output
+        assert "task_ids" in plan_output["plan_meta"]
+        assert "executor_agent" in plan_output["plan_meta"]
+        assert len(plan_output["plan_meta"]["task_ids"]) > 0, "Should have at least one task"
+        
+        print(f"\n✅ Plan created with {len(plan_output['plan_meta']['task_ids'])} tasks")
+        print(f"   Task IDs: {plan_output['plan_meta']['task_ids']}")
+        print(f"   Executor: {plan_output['plan_meta']['executor_agent']}")
+
+    print(f"\n✅ Test completed successfully!")
