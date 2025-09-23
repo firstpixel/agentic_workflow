@@ -5,11 +5,9 @@ from pathlib import Path
 from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
 from src.core.utils import to_display
+from tests.test_utils import get_test_model_config, skip_if_no_ollama
 
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run this test with real Ollama."
-
-@pytest.mark.skipif(not ollama_model, reason=skip_reason)
+@skip_if_no_ollama()
 def test_display_unwrap_with_ollama(tmp_path, monkeypatch):
     # prompts em arquivos
     prompts = tmp_path / "prompts"
@@ -28,10 +26,11 @@ def test_display_unwrap_with_ollama(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("PROMPT_DIR", str(prompts))
 
+    model_config = get_test_model_config("standard", temperature=0.0)
     writer = LLMAgent(AgentConfig(
         name="Writer",
         prompt_file="writer_unwrap.md",
-        model_config={"model": ollama_model, "options": {"temperature": 0.0}}
+        model_config=model_config
     ))
     agents = {"Writer": writer}
     graph = {"Writer": []}

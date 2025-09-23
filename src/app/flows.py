@@ -262,8 +262,8 @@ def make_router_writer_critic_join_flow(
 
     critic = CriticAgent(AgentConfig(
         name=critic_name,
+        prompt_file=critic_file,
         model_config={
-            "prompt_file": critic_file,
             "model": model,
             "options": {"temperature": 0.1}
         }

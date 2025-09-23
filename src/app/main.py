@@ -145,7 +145,10 @@ def demo_flows_sample():
     fb1 = make_prompt_handoff_flow(model=model)
     wm1 = fb1.manager()
     print("\n=== TASK 12: Prompt/Plan Handoff (flows.py) ===")
-    r1 = wm1.run_workflow("PromptAgent", {"text": "Explain the API telemetry design. [[PARAGRAPH]]"})
+    r1 = wm1.run_workflow("PromptAgent", {
+        "text": "Explain the API telemetry design. [[PARAGRAPH]]",
+        "user_prompt": "Explain the API telemetry design. [[PARAGRAPH]]"
+    })
     for r in r1:
         print("->", r.display_output or r.output)
 
@@ -153,7 +156,10 @@ def demo_flows_sample():
     fb2 = make_guardrails_writer_flow(model=model)
     wm2 = fb2.manager()
     print("\n=== TASK 12: Guardrails -> Writer (flows.py) ===")
-    r2 = wm2.run_workflow("Guardrails", {"text": "Contact me at jane@company.com. Summarize design."})
+    r2 = wm2.run_workflow("Guardrails", {
+        "text": "Contact me at jane@company.com. Summarize design.",
+        "user_prompt": "Contact me at jane@company.com. Summarize design."
+    })
     for r in r2:
         print("->", r.display_output or r.output)
 
@@ -223,7 +229,10 @@ def demo_prompt_overrides():
     agents = {"PromptSwitcher": switcher, "Writer": writer}
     graph  = {"PromptSwitcher": ["Writer"], "Writer": []}
     wm = WorkflowManager(graph, agents)
-    user_text = {"text": "Outline the design choices for the API telemetry module. [[PARAGRAPH]]"}
+    user_text = {
+        "text": "Outline the design choices for the API telemetry module. [[PARAGRAPH]]",
+        "user_prompt": "Outline the design choices for the API telemetry module. [[PARAGRAPH]]"
+    }
     results = wm.run_workflow("PromptSwitcher", user_text)
     print("\n=== TASK 10: Prompt Overrides Sample ===")
     for r in results:
@@ -352,7 +361,10 @@ def demo_human_in_the_loop(auto_approve=False):
     graph  = {"ApprovalGate": ["Writer"], "Writer": []}
     wm = WorkflowManager(graph, agents)
 
-    content = {"text": "Draft: We will add a cross-platform analytics pipeline for funnels and retention."}
+    content = {
+        "text": "Draft: We will add a cross-platform analytics pipeline for funnels and retention.",
+        "user_prompt": "Draft: We will add a cross-platform analytics pipeline for funnels and retention."
+    }
     r1 = wm.run_workflow("ApprovalGate", content)
     print("\n=== HITL Sample – Request ===")
     for r in r1:
@@ -404,7 +416,8 @@ def demo_human_in_the_loop(auto_approve=False):
     decision_payload = {
         "approval_id": approval_id,
         "human_decision": human_decision,
-        "human_comment": human_comment
+        "human_comment": human_comment,
+        "user_prompt": f"approval_id: {approval_id}, decision: {human_decision}, comment: {human_comment}"
     }
 
     print(f"\n=== HITL Sample – Decision ({human_decision}) ===")
@@ -439,8 +452,8 @@ def demo_guardrails():
 
 def demo_query_rewriter():
     model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
-    model_cfg = {"model": model, "options": {"temperature": 0.1}, "prompt_file": "query_rewriter.md"}
-    rewriter = QueryRewriterAgent(AgentConfig(name="QueryRewriter", model_config=model_cfg))
+    model_cfg = {"model": model, "options": {"temperature": 0.1}}
+    rewriter = QueryRewriterAgent(AgentConfig(name="QueryRewriter", prompt_file="query_rewriter.md", model_config=model_cfg))
 
     stm = MongoSTM()
     ltm = QdrantVectorStore(collection="agentic_docs")
@@ -486,7 +499,15 @@ def demo_rag_memory():
     question = {"query": "How are analytics events captured for funnels?"}
     r1 = wm.run_workflow("Retriever", question)
     ctx_md = r1[-1].output.get("contexts_md","")
-    r2 = wm.run_workflow("Answerer", {"question":"How are analytics events captured for funnels?", "contexts_md": ctx_md})
+    # Build the user prompt by substituting the template manually
+    question_text = "How are analytics events captured for funnels?"
+    user_prompt = f"""Question: {question_text}
+
+Retrieved Context:
+{ctx_md}
+
+Please answer concisely using only the information in the retrieved context."""
+    r2 = wm.run_workflow("Answerer", {"user_prompt": user_prompt})
 
     print("\n=== RAG & Memory Sample ===")
     for r in r1+r2:
@@ -556,7 +577,7 @@ def demo_switch_agent_routing():
         "options": {"temperature": 0.0}
     }
     agents = {
-        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg), llm_fn=llm_agent.llm_fn),
+        "Router":  SwitchAgent(AgentConfig(name="Router", prompt_file="switch_agent.md", model_config=routes_cfg)),
         "Billing": EchoAgent(AgentConfig(name="Billing")),
         "Support": EchoAgent(AgentConfig(name="Support")),
         "Sales":   EchoAgent(AgentConfig(name="Sales")),
@@ -589,7 +610,7 @@ def demo_critic_agent_evaluation():
     llm_agent = create_ollama_llm_agent(model)
     os.environ['PROMPT_DIR'] = os.getenv('PROMPT_DIR', "/Users/gilbeyruth/AIProjects/agentic_workflow/prompts")
 
-    writer = LLMAgent(AgentConfig(name="Writer", model_config={"model": model}), llm_fn=llm_agent.llm_fn)
+    writer = LLMAgent(AgentConfig(name="Writer", model_config={"model": model}, prompt_file="tech_writer.md"))
     critic = CriticAgent(AgentConfig(
         name="Critic",
         model_config={
@@ -597,10 +618,10 @@ def demo_critic_agent_evaluation():
             "threshold": 7.0,
             "max_iters": 2,
             "next_on_pass": "Done",
-            "prompt_file": "critic_agent.md",
             "model": model
-        }
-    ), llm_fn=llm_agent.llm_fn)
+        },
+        prompt_file="critic_agent.md"
+    ))
 
     class DoneAgent(EchoAgent):
         def run(self, message):
@@ -615,7 +636,7 @@ def demo_critic_agent_evaluation():
     print("\n=== Writer-Critic Feedback Loop Example ===")
     prompt = "Write a technical summary about Python async/await patterns. Include examples and best practices."
     try:
-        results = wm.run_workflow("Writer", {"prompt": prompt})
+        results = wm.run_workflow("Writer", {"user_prompt": prompt})
         print(f"\n📊 Workflow completed with {len(results)} steps:")
         for i, r in enumerate(results):
             agent_name = r.metrics.get("agent", "Unknown")

@@ -1,13 +1,15 @@
 import os
 from src.core.event_bus import get_event_bus
-from src.config.settings import get_settings
+from src.config.settings import get_settings, reset_settings
 
 def test_settings_load_and_eventbus_basic(monkeypatch):
     # Define alguns envs e recarrega settings
     monkeypatch.setenv("OLLAMA_MODEL", "llama3.2:1b")
     monkeypatch.setenv("PROMPT_DIR", "/tmp/prompts")
     monkeypatch.setenv("EVENTBUS_ENABLED", "true")
-
+    
+    # Reset settings to pick up new environment variables
+    reset_settings()
     s = get_settings()
     # Asserções básicas
     assert s.ollama_model.startswith("llama3.2:1b")

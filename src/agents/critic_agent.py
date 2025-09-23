@@ -1,21 +1,18 @@
-from __future__ import annotations
-from typing import Any, Dict, List, Optional, Callable
-import json, re
-from src.core.agent import BaseAgent, AgentConfig, LLMCallable, load_prompt_text, SafeDict
+import re
+import json
+from typing import Dict, Any
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent
 from src.core.types import Message, Result
 
-def _extract_text(payload: Any) -> str:
-    if isinstance(payload, list):
-        return "\n\n".join(_extract_text(p) for p in payload)
-    if isinstance(payload, dict):
-        for k in ("text","draft","answer","content","output"):
-            v = payload.get(k)
-            if isinstance(v,str): return v
-        return json.dumps(payload, ensure_ascii=False)[:8000]
-    return str(payload)
+_MD_DECISION = re.compile(r"##\s*DECISION\s*[:\n]\s*([^\n]*)", re.IGNORECASE)
+_MD_SCORE = re.compile(r"##\s*SCORE\s*[:\n]\s*([0-9.]+)", re.IGNORECASE)
 
-_MD_DECISION=re.compile(r"^###\s*DECISION\s*\n([^\n]+)", re.IGNORECASE|re.MULTILINE)
-_MD_SCORE   =re.compile(r"^###\s*SCORE\s*\n([0-9]+(\.[0-9]+)?)", re.IGNORECASE|re.MULTILINE)
+def _extract_text(payload):
+    if isinstance(payload, dict):
+        for k in ("text", "prompt", "input", "query", "content"):
+            if isinstance(payload.get(k), str):
+                return payload[k]
+    return str(payload)
 
 def _parse_markdown(md: str) -> Dict[str,Any]:
     decision="REVISE"
@@ -27,17 +24,20 @@ def _parse_markdown(md: str) -> Dict[str,Any]:
 
 class CriticAgent(BaseAgent):
     """
-    Avalia em Markdown (sem JSON). Se DECISION=PASS, segue; caso contrário, pede repeat.
+    Evaluates content using LLMAgent with Markdown output. If DECISION=PASS, continues; otherwise requests repeat.
+    Uses internal LLMAgent with system prompt from config.prompt_file (default: critic_agent.md)
+    
     model_config:
       rubric: [...]
       threshold: float (0..10)
       max_iters: int
-      next_on_pass: str (opcional)
-      prompt_file: str (default critic_agent.md)
+      next_on_pass: str (optional)
+      model: str (for LLMAgent)
     """
-    def __init__(self, config: AgentConfig, llm_fn: LLMCallable):
+    def __init__(self, config: AgentConfig):
         super().__init__(config)
-        self.llm_fn = llm_fn
+        # Create internal LLMAgent - it will load the system prompt automatically
+        self.llm_agent = LLMAgent(config)
 
     def run(self, message: Message) -> Result:
         mc = self.config.model_config or {}
@@ -45,27 +45,44 @@ class CriticAgent(BaseAgent):
         threshold=float(mc.get("threshold",7.5))
         max_iters=int(mc.get("max_iters",2))
         next_on_pass=mc.get("next_on_pass")
-        prompt_file=mc.get("prompt_file") or "critic_agent.md"
 
         text=_extract_text(message.data)
         iteration=int(message.meta.get("iteration",0))
 
-        tmpl=load_prompt_text(prompt_file)
-        if not tmpl: raise FileNotFoundError(f"Missing prompt file: {prompt_file}")
-        prompt=tmpl.format_map(SafeDict({"rubric_json": json.dumps(rubric,ensure_ascii=False),"text":text}))
+        # Build user prompt with context for the system prompt template
+        user_prompt = f"""Text to evaluate: {text}
 
-        md=self.llm_fn(prompt, **mc)
+Rubric: {json.dumps(rubric, ensure_ascii=False)}
+Current iteration: {iteration}
+
+Please evaluate this content according to the rubric and provide your assessment."""
+
+        # Use LLMAgent with new interface
+        llm_message = Message(data={"user_prompt": user_prompt}, meta=message.meta)
+        llm_result = self.llm_agent.run(llm_message)
+        
+        if not llm_result.success:
+            return Result.error(f"LLM evaluation failed: {llm_result.output}")
+            
+        md = llm_result.output.get("text", "")
         parsed=_parse_markdown(md)
         passed = parsed["decision"]=="PASS" and parsed["score"]>=threshold
 
-        disp=f"🧪 Critic(decision={parsed['decision']}, score={parsed['score']:.2f}, iter={iteration})"
-        feedback={"decision":parsed["decision"],"score":parsed["score"],"iteration":iteration,"rubric":rubric}
+        # Prepare output with score and rubric included
+        output_data = message.data.copy() if isinstance(message.data, dict) else {"text": message.data}
+        output_data["score"] = parsed["score"]
+        output_data["decision"] = parsed["decision"]
+        output_data["rubric"] = rubric  # Include rubric for testing
 
-        if passed:
-            ctrl={}
-            if next_on_pass: ctrl["goto"]=next_on_pass
-            return Result.ok(output=feedback, display_output=disp, control=ctrl)
-
-        if iteration>=max_iters:
-            return Result.ok(output=feedback, display_output=disp+" | max_iters", control={})
-        return Result.ok(output=feedback, display_output=disp+" | request repeat", control={"repeat":True})
+        if passed or iteration >= max_iters:
+            if passed and next_on_pass:
+                return Result.ok(output=output_data, 
+                               display_output=f"✅ Critic: PASS score={parsed['score']:.1f}",
+                               control={"goto": next_on_pass})
+            else:
+                return Result.ok(output=output_data, 
+                               display_output=f"✅ Critic: PASS score={parsed['score']:.1f}")
+        else:
+            return Result.ok(output=output_data, 
+                           display_output=f"❌ Critic: {parsed['decision']} score={parsed['score']:.1f}",
+                           control={"repeat": True})

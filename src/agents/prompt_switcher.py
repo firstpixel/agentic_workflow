@@ -2,7 +2,7 @@ from __future__ import annotations
 from typing import Any, Dict
 import re
 
-from src.core.agent import BaseAgent, AgentConfig, LLMAgent, load_prompt_text, SafeDict
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent
 from src.core.types import Message, Result
 
 # -------- Parsers de Markdown --------
@@ -87,7 +87,9 @@ class PromptSwitcherAgent(BaseAgent):
             model_config=mc
         ))
         text = self._extract_text(message.data)
-        md = llm.execute(Message(data={"text": text})).output.get("text", "")
+        # Create message compatible with new LLMAgent interface
+        llm_message = Message(data={"user_prompt": text})
+        md = llm.execute(llm_message).output.get("text", "")
 
         targets = _parse_target_prompts(md)
         if not targets:
@@ -98,14 +100,23 @@ class PromptSwitcherAgent(BaseAgent):
         # Convert to targeted overrides for WorkflowManager
         targeted = {agent_name: {"prompt_file": file_name} for agent_name, file_name in targets.items()}
 
-        # Per-branch payload with plan (if available)
+        # Per-branch payload with plan (if available) and user_prompt for LLMAgent compatibility
         per_branch_payload: Dict[str, Any] = {}
         for agent_name in targets.keys():
-            per_branch_payload[agent_name] = {"plan_md": plan_md} if plan_md else {}
+            branch_data = {"user_prompt": text, "text": text}  # Always include user_prompt and text
+            if plan_md:
+                branch_data["plan_md"] = plan_md
+            per_branch_payload[agent_name] = branch_data
 
         disp = f"🧭 PromptSwitcher -> targets={targets}" + (f" plan={'yes' if plan_md else 'no'}" if plan_md else "")
+        
+        # Add user_prompt format for downstream LLMAgent compatibility
+        output_data = {**per_branch_payload, "targets": targets, "md": md}
+        output_data["user_prompt"] = text  # Add user_prompt for LLMAgent compatibility
+        output_data["text"] = text  # Keep text for backward compatibility
+        
         return Result.ok(
-            output={**per_branch_payload, "targets": targets, "md": md},  # Include legacy outputs for compatibility
+            output=output_data,
             display_output=disp,
             overrides={"for": targeted} if targeted else {}
         )

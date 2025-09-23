@@ -6,6 +6,7 @@ Test multiple planning scenarios with focused logging - shows only LLM responses
 import sys
 import os
 import pytest
+from tests.test_utils import get_test_model_config
 
 # Add project root to path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -81,8 +82,8 @@ def filtered_print(*args, **kwargs):
         "Success:" in text):
         original_print(*args, **kwargs)
 
-def test_planning_scenario(project_name, request):
-    """Test with focused logging"""
+def run_planning_scenario(project_name, request):
+    """Helper function to run planning scenario with focused logging"""
     print(f"\n{'='*60}")
     print(f"🧪 TESTING: {project_name}")
     print(f"{'='*60}")
@@ -93,13 +94,12 @@ def test_planning_scenario(project_name, request):
     builtins.print = filtered_print
     
     try:
+        model_config = get_test_model_config("complex", temperature=0.1)
+        model_config["executor_agent"] = "test_executor"
+        
         config = AgentConfig(
             name="test_planner",
-            model_config={
-                "model": "gemma3:latest",
-                "temperature": 0.1,
-                "executor_agent": "test_executor"
-            }
+            model_config=model_config
         )
         
         planner = PlannerAgent(config)
@@ -138,7 +138,7 @@ def test_planning_scenario(project_name, request):
 ])
 def test_multiple_planning_scenarios(project_name, project_request):
     """Test planning for different project types"""
-    success = test_planning_scenario(project_name, project_request)
+    success = run_planning_scenario(project_name, project_request)
     assert success, f"Planning failed for {project_name}"
 
 
@@ -146,13 +146,12 @@ def test_planner_workflow_integration():
     """Test that detailer processes each task and merger receives all detailed tasks"""
     request = "Create a simple python hello world script with a function and tests."
     
+    model_config = get_test_model_config("complex", temperature=0.1)
+    model_config["executor_agent"] = "test_executor"
+    
     config = AgentConfig(
         name="test_planner",
-        model_config={
-            "model": "gemma3:latest",
-            "temperature": 0.1,
-            "executor_agent": "test_executor"
-        }
+        model_config=model_config
     )
     
     planner = PlannerAgent(config)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, List, Protocol
+from typing import Any, Dict, Optional, List
 from time import time
 from pathlib import Path
 import os
@@ -13,12 +13,6 @@ except ImportError:
 
 from .utils import to_display
 from .types import Message, Result
-
-
-# --------- LLM callable protocol (minimal) ------------
-class LLMCallable(Protocol):
-    def __call__(self, user_prompt: str, history: Optional[List[Dict[str, str]]] = None, **kwargs) -> str: ...
-    # (Kept for compatibility; we call ollama.chat() directly)
 
 
 # --------- Config --------------------------
@@ -141,8 +135,9 @@ class LLMAgent(BaseAgent):
         OPT_KEYS = ("temperature", "top_p", "frequency_penalty", "presence_penalty", "num_ctx")
         options = {k: model_cfg[k] for k in OPT_KEYS if k in model_cfg}
 
+        client = ollama.Client(host="http://192.168.1.151:11434")
         # 5) Call Ollama (no streaming)
-        response = ollama.chat(
+        response = client.chat(
             model=model,
             messages=messages,
             options=options,

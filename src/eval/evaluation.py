@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional, Callable
 import re
 
-from src.core.agent import AgentConfig, LLMAgent, load_prompt_text, SafeDict
+from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
 from src.eval.metrics import MetricsCollector
 from src.core.types import Message
@@ -70,14 +70,28 @@ class EvaluationRunner:
         if judge == "regex" and case.required_regex:
             verdict = "PASS" if re.search(case.required_regex, final_text, re.IGNORECASE) else "FAIL"
         elif judge == "llm":
-            # carrega prompt do juiz em arquivo .md
-            tmpl = load_prompt_text(judge_prompt_file)
+            # Use LLMAgent with system prompt from file - no manual template loading needed
             case_md = case.case_md or ""
-            md_prompt = tmpl.format_map(SafeDict({"case_md": case_md, "model_output_md": final_text}))
-            judge_agent = LLMAgent(AgentConfig(name="EvalJudge", prompt_file=None, model_config=llm_model_cfg or {}))
-            judge_output = judge_agent.llm_fn(md_prompt, **(llm_model_cfg or {}))
-            parsed = parse_judge_md(judge_output)
-            verdict, reasons = parsed["verdict"], parsed["reasons"]
+            user_prompt = f"""Case description: {case_md}
+
+Model output to evaluate: {final_text}
+
+Please evaluate this output against the case requirements."""
+            
+            judge_agent = LLMAgent(AgentConfig(
+                name="EvalJudge", 
+                prompt_file=judge_prompt_file, 
+                model_config=llm_model_cfg or {}
+            ))
+            judge_message = Message(data={"user_prompt": user_prompt})
+            judge_result = judge_agent.run(judge_message)
+            
+            if judge_result.success:
+                judge_output = judge_result.output.get("text", "")
+                parsed = parse_judge_md(judge_output)
+                verdict, reasons = parsed["verdict"], parsed["reasons"]
+            else:
+                verdict, reasons = "FAIL", [f"Judge LLM failed: {judge_result.output}"]
 
         return {"case_id": case.case_id, "verdict": verdict, "reasons": reasons, "final_text": final_text}
 

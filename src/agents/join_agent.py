@@ -37,4 +37,4 @@ class JoinAgent(BaseAgent):
             combined = "\n\n".join(parts)
 
         disp = f"🔗 Join ({'multi' if isinstance(message.data, list) else 'single'})"
-        return Result.ok(output={"text": combined}, display_output=disp)
+        return Result.ok(output={"text": combined, "user_prompt": combined}, display_output=disp)

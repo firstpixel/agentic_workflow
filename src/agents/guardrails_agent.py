@@ -1,7 +1,7 @@
 from __future__ import annotations
 from typing import Any, Dict, Optional
 
-from src.core.agent import BaseAgent, AgentConfig, LLMAgent, load_prompt_text, SafeDict
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent
 from src.core.types import Message, Result
 from src.guardrails.guardrails import redact_pii, parse_moderation_md
 
@@ -60,7 +60,9 @@ class GuardrailsAgent(BaseAgent):
                 model_config={k:v for k,v in mc.items()}  # inclui model/options/timeout
             )
             moderator = LLMAgent(llm_cfg)  # usa Ollama por padrão
-            prompt_input = {"text": original_text, "pii_md": pii_md}
+            # Create user prompt from text and PII markdown
+            user_prompt = f"Text: {original_text}\n\nPII Analysis: {pii_md}"
+            prompt_input = {"user_prompt": user_prompt}
             md_res = moderator.execute(Message(data=prompt_input))
             mod_md = (md_res.output or {}).get("text","") if md_res.success else ""
             parsed = parse_moderation_md(mod_md)
@@ -83,6 +85,7 @@ class GuardrailsAgent(BaseAgent):
         out = {
             "decision": decision,
             "text": sanitized,
+            "user_prompt": sanitized,  # Add user_prompt format for LLMAgent compatibility
             "pii": counts,
             "reasons": reasons,
             "md": mod_md

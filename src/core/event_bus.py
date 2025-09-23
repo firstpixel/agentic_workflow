@@ -6,7 +6,7 @@ import threading
 import time
 import uuid
 
-from config.settings import get_settings
+from src.config.settings import get_settings
 
 EventHandler = Callable[[str, Dict[str, Any]], None]
 

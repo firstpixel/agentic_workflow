@@ -43,4 +43,16 @@ class RAGRetrieverAgent(BaseAgent):
         if original_question:
             output["question"] = original_question
             
+        # Add user_prompt format for downstream LLMAgent compatibility
+        # Build a comprehensive prompt with the original query and retrieved context
+        if query:
+            user_prompt = f"""Question: {query}
+
+Retrieved Context:
+{ctx_md}
+
+Please answer concisely using only the information in the retrieved context."""
+            output["user_prompt"] = user_prompt
+            output["text"] = query  # Also add text for backward compatibility
+            
         return Result.ok(output=output, display_output=disp)

@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
 
-from src.core.agent import BaseAgent, AgentConfig, LLMAgent, LLMCallable, load_prompt_text, SafeDict
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent
 from src.core.types import Message, Result
 
 
@@ -108,11 +108,10 @@ class SwitchAgent(BaseAgent):
       - Caso não fornecido, o LLM vira um stub que devolve a primeira rota (apenas para dev).
     """
 
-    def __init__(self, config: AgentConfig, llm_fn: LLMCallable):
+    def __init__(self, config: AgentConfig):
         super().__init__(config)
-        self.llm_fn = llm_fn
         # Create internal LLMAgent for consistent Ollama integration
-        self.llm_agent = LLMAgent(config, llm_fn)
+        self.llm_agent = LLMAgent(config)
 
     # ------------------------ API principal ----------------------------
 
@@ -220,23 +219,17 @@ class SwitchAgent(BaseAgent):
                 "keywords": spec.get("keywords", []) or []
             })
 
-        # Load prompt template from file
-        prompt_tmpl = load_prompt_text(cfg["prompt_file"])
-        if not prompt_tmpl:
-            raise FileNotFoundError(f"SwitchAgent prompt not found: {cfg['prompt_file']}")
+        # Build user prompt with routing options context
+        user_prompt = f"""Text to route: {text}
 
-        # Format the prompt using SafeDict
-        prompt = prompt_tmpl.format_map(SafeDict({
-            "text": text,
-            "route_options": json.dumps(options, ensure_ascii=False)
-        }))
+Available routes:
+{json.dumps(options, ensure_ascii=False, indent=2)}
+
+Please analyze this text and choose the best route."""
 
         try:
-            # Create a message for LLMAgent
-            user_message = Message(data={
-                "text": f"Please route this query: {text}",
-                "route_options": json.dumps(options, ensure_ascii=False)
-            })
+            # Create a message for new LLMAgent interface
+            user_message = Message(data={"user_prompt": user_prompt})
             
             # Use LLMAgent for consistent Ollama integration
             llm_result = self.llm_agent.run(user_message)

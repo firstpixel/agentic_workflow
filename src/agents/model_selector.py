@@ -5,34 +5,42 @@ from typing import Dict, Any, Optional
 import re
 import os
 
-from src.core.agent import LLMAgent, AgentConfig, load_prompt_text, SafeDict
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent
 from src.core.types import Result, Message
 
 # Compiled regex pattern for better performance and accuracy
 _DECISION = re.compile(r"###\s*DECISION\s*\n(.*?)(?=\n###|\Z)", re.IGNORECASE | re.MULTILINE | re.DOTALL)
 
 
-class ModelSelectorAgent(LLMAgent):
+class ModelSelectorAgent(BaseAgent):
     """
     Agent that selects and applies model configurations based on routing decisions.
+    Uses internal LLMAgent with system prompt from config.prompt_file (default: model_router.md)
+    
+    model_config:
+      classes: {"SIMPLE": {...}, "STANDARD": {...}, "COMPLEX": {...}}
+      targets: ["agent1", "agent2", ...]
+      model: str (for LLMAgent)
     """
     
     def __init__(self, config: AgentConfig):
         super().__init__(config)
         self.classes = config.model_config.get("classes", {})
         self.targets = config.model_config.get("targets", [])
+        # Create internal LLMAgent - will auto-load system prompt
+        self.llm_agent = LLMAgent(config)
     
     def run(self, message: Message) -> Result:
         """
         Run the model selector to determine routing and apply overrides.
         """
         try:
-            # Validate required configuration
-            if not self.config.prompt_file:
-                raise ValueError("ModelSelectorAgent requires prompt_file in AgentConfig")
+            # Build user prompt with message context
+            user_prompt = self._build_user_prompt(message)
             
-            # Get the LLM routing decision
-            result = super().run(message)
+            # Use LLMAgent to get routing decision
+            llm_message = Message(data={"user_prompt": user_prompt}, meta=message.meta)
+            result = self.llm_agent.run(llm_message)
             
             if not result.success:
                 return result
@@ -51,6 +59,7 @@ class ModelSelectorAgent(LLMAgent):
             
             # Apply the decision to all configured targets (the selector doesn't decide targets)
             target_overrides: Dict[str, Dict[str, Any]] = {}
+            cfg = {}
             if self.targets:
                 cfg = self.classes.get(decision, {})
                 if cfg:
@@ -60,12 +69,14 @@ class ModelSelectorAgent(LLMAgent):
             # More informative display output
             display_msg = f"🔀 Selector: decision={decision} targets={self.targets}"
             
-            # Return result with routing information and overrides
+            # Return result with routing information and user_prompt for downstream LLMAgents
             routing_info = {
                 "decision": decision,
                 "model_config": cfg if cfg else {},  # Include the config for debugging
                 "downstream_agents": list(target_overrides.keys()),
-                "md": decision  # Simplified debug output
+                "md": decision,  # Simplified debug output
+                "user_prompt": self._extract_message_text(message),  # Add user_prompt for LLMAgent compatibility
+                "text": self._extract_message_text(message)  # Also add text for backward compatibility
             }
             
             return Result(
@@ -78,8 +89,8 @@ class ModelSelectorAgent(LLMAgent):
         except Exception as e:
             return Result(success=False, output=str(e))
     
-    def _build_prompt(self, message: Message) -> str:
-        """Override to add debug info."""
+    def _build_user_prompt(self, message: Message) -> str:
+        """Build user prompt with context for new LLMAgent interface."""
         ctx = {
             "root": message.meta.get("root", ""),
             "previous": "",
@@ -87,22 +98,30 @@ class ModelSelectorAgent(LLMAgent):
             "iteration": message.meta.get("iteration", 0),
             "message_text": self._extract_message_text(message),
         }
+        
         if isinstance(message.data, dict) and "previous" in message.data and "input" in message.data:
             ctx["root"] = message.data.get("input", ctx["root"])
             ctx["previous"] = message.data.get("previous", "")
 
-        # Include all keys from message.data in the context for template formatting
+        # Include all keys from message.data in the context
         if isinstance(message.data, dict):
             ctx.update(message.data)
         
-        tmpl = load_prompt_text(self.config.prompt_file)
+        # Build a comprehensive user prompt with all context
+        user_prompt_parts = [
+            f"Content to route: {ctx['message_text']}",
+        ]
         
-        if tmpl:
-            result = tmpl.format_map(SafeDict(ctx))
-            return result
+        if ctx.get("root"):
+            user_prompt_parts.append(f"Original request: {ctx['root']}")
+        if ctx.get("previous"):
+            user_prompt_parts.append(f"Previous content: {ctx['previous']}")
+        if ctx.get("critic_feedback"):
+            user_prompt_parts.append(f"Feedback: {ctx['critic_feedback']}")
+        if ctx.get("iteration", 0) > 0:
+            user_prompt_parts.append(f"Iteration: {ctx['iteration']}")
         
-        fallback = ctx["message_text"] or str(message.data)
-        return fallback
+        return "\n\n".join(user_prompt_parts)
     
     def _extract_message_text(self, message: Message) -> str:
         """Extract message text with comprehensive key search."""

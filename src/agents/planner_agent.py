@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Tuple, Optional
 import re
 
-from src.core.agent import BaseAgent, AgentConfig, LLMAgent, load_prompt_text, SafeDict
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent
 from src.core.types import Message, Result
 
 
@@ -168,20 +168,18 @@ class PlannerAgent(BaseAgent):
             model_config=mc
         ))
         
-        # Debug: Check prompt template
-        try:
-            prompt_template = load_prompt_text(prompt_file)
-            print(f"🔍 [DEBUG] Prompt template loaded: {len(prompt_template)} chars")
-            print(f"🔍 [DEBUG] Template preview: {prompt_template[:300]}{'...' if len(prompt_template) > 300 else ''}")
-        except Exception as e:
-            print(f"❌ [DEBUG] Error loading prompt template: {e}")
+        # Build user prompt with variable context - new LLMAgent will handle system prompt automatically
+        user_prompt_parts = []
+        for k, v in vars.items():
+            user_prompt_parts.append(f"{k}: {v}")
         
-        # We pass data that will be used for template formatting
-        message_data = dict(vars)
-        message_data["text"] = "\n".join(f"{k}: {v}" for k, v in vars.items())
+        user_prompt = "\n\n".join(user_prompt_parts)
+        print(f"🔍 [DEBUG] Built user prompt: {len(user_prompt)} chars")
         
-        print(f"🔍 [DEBUG] Message data keys: {list(message_data.keys())}")
-        print(f"🔍 [DEBUG] Sending message to stage agent...")
+        # Create message compatible with new LLMAgent interface
+        message_data = {"user_prompt": user_prompt}
+        
+        print(f"🔍 [DEBUG] Sending message to stage agent with user_prompt...")
         
         try:
             res = stage_agent.run(Message(data=message_data))

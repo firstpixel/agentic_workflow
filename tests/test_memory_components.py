@@ -4,29 +4,19 @@ Tests for memory components: MongoSTM, QdrantVectorStore, and MemoryManager
 import pytest
 import os
 from typing import Dict, Any
+from tests.test_utils import get_test_database_config, skip_if_no_databases
 
-# Skip tests if required services are not available
-mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-qdrant_url = os.getenv("QDRANT_URL", "http://localhost:6333")
+# Get database configuration from centralized settings
+db_config = get_test_database_config()
 
-# Check what environment variables are missing
-missing_envs = []
-if not mongodb_uri:
-    missing_envs.append("MONGODB_URI")
-if not qdrant_url:
-    missing_envs.append("QDRANT_URL")
-
-need_envs = len(missing_envs) > 0
-skip_reason = f"Missing environment variables: {', '.join(missing_envs)}" if need_envs else ""
-
-@pytest.mark.skipif(need_envs, reason=skip_reason)
+@skip_if_no_databases()
 class TestMongoSTM:
     """Test Short Term Memory (STM) with MongoDB"""
     
     def setup_method(self):
         """Setup for each test method"""
         from src.memory.mongo_stm import MongoSTM
-        self.stm = MongoSTM(uri=mongodb_uri, db_name="test_memory", coll_name="test_stm")
+        self.stm = MongoSTM(uri=db_config["mongo_uri"], db_name="test_memory", coll_name="test_stm")
         # Clean up any existing test data
         self.stm.client.drop_database("test_memory")
     
@@ -102,14 +92,14 @@ class TestMongoSTM:
         assert recent_2[0]["content"] == "Message for session 2"
 
 
-@pytest.mark.skipif(need_envs, reason=skip_reason)
+@skip_if_no_databases()
 class TestQdrantVectorStore:
     """Test Long Term Memory (LTM) with Qdrant Vector Store"""
     
     def setup_method(self):
         """Setup for each test method"""
         from src.memory.qdrant_store import QdrantVectorStore
-        self.ltm = QdrantVectorStore(url=qdrant_url, collection="test_ltm_collection")
+        self.ltm = QdrantVectorStore(url=db_config["qdrant_url"], collection="test_ltm_collection")
         # Clean up any existing test collection
         try:
             self.ltm.client.delete_collection("test_ltm_collection")
@@ -192,7 +182,7 @@ class TestQdrantVectorStore:
             assert ("Collection" in error_str and "doesn't exist" in error_str) or "404" in error_str
 
 
-@pytest.mark.skipif(need_envs, reason=skip_reason)
+@skip_if_no_databases()
 class TestMemoryManager:
     """Test MemoryManager integration of STM and LTM"""
     
@@ -202,8 +192,8 @@ class TestMemoryManager:
         from src.memory.qdrant_store import QdrantVectorStore
         from src.memory.memory_manager import MemoryManager
         
-        self.stm = MongoSTM(uri=mongodb_uri, db_name="test_memory_mgr", coll_name="test_stm_mgr")
-        self.ltm = QdrantVectorStore(url=qdrant_url, collection="test_ltm_mgr_collection")
+        self.stm = MongoSTM(uri=db_config["mongo_uri"], db_name="test_memory_mgr", coll_name="test_stm_mgr")
+        self.ltm = QdrantVectorStore(url=db_config["qdrant_url"], collection="test_ltm_mgr_collection")
         self.memory = MemoryManager(self.stm, self.ltm)
         
         # Cleanup
@@ -286,15 +276,11 @@ class TestMemoryManager:
 
 # Test environment check function
 def test_memory_environment_check():
-    """Test that shows what environment variables are needed"""
+    """Test that shows what database configuration is being used"""
     print(f"🔍 Memory Test Environment Check:")
-    print(f"   MONGODB_URI: {'✅ Set' if mongodb_uri else '❌ Missing'}")
-    print(f"   QDRANT_URL: {'✅ Set' if qdrant_url else '❌ Missing'}")
-    
-    if need_envs:
-        print(f"   ⚠️  Tests will be skipped due to missing: {', '.join(missing_envs)}")
-    else:
-        print(f"   ✅ All environment variables set - memory tests will run")
+    print(f"   MONGO_URI: {'✅ Set' if db_config['mongo_uri'] else '❌ Missing'} -> {db_config['mongo_uri']}")
+    print(f"   QDRANT_URL: {'✅ Set' if db_config['qdrant_url'] else '❌ Missing'} -> {db_config['qdrant_url']}")
+    print(f"   ✅ Using centralized configuration from settings.py")
     
     # This test always passes, it's just for information
     assert True

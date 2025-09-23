@@ -1,21 +1,21 @@
 import os
 from src.app.flows_planner import build_planner_flow
 from src.core.workflow_manager import WorkflowManager
+from tests.test_utils import get_test_model_config
 
 
 def test_planner_flow_end_to_end():
     """Test the full planner flow using real Ollama calls"""
     
     # ---- Build flow with MockExecutor (fail_once=True to test retry path) ----
+    model_config = get_test_model_config("complex", temperature=0.1)
+    model_config["executor_agent"] = "Executor"
+    
     graph, agents, node_policies = build_planner_flow(
         executor_agent_name="Executor",
         executor_model_config={"fail_once": True},  # first attempt per task fails, then passes
         retry_limit=2,
-        planner_model_config={
-            "executor_agent": "Executor", 
-            "model": os.getenv("OLLAMA_MODEL", "gemma3:latest"),
-            "options": {"temperature": 0.1}
-        }
+        planner_model_config=model_config
     )
 
     wm = WorkflowManager(graph=graph, agents=agents, node_policies=node_policies)

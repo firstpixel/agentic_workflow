@@ -5,27 +5,21 @@ from src.core.workflow_manager import WorkflowManager
 from src.core.agent import AgentConfig, LLMAgent
 from src.agents.switch_agent import SwitchAgent
 from src.agents.echo import EchoAgent
+from tests.test_utils import setup_test_environment, get_test_model_config, skip_if_no_ollama
 
-# Set PROMPT_DIR to the actual prompts directory
-os.environ["PROMPT_DIR"] = "/Users/gilbeyruth/AIProjects/agentic_workflow/prompts"
-
-# --- Ollama configuration ---
-ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-ollama_model = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
-skip_reason_ollama = "Set OLLAMA_MODEL (e opcional OLLAMA_HOST) para rodar este teste."
+# Set up test environment
+setup_test_environment()
 
 def create_ollama_llm_agent() -> LLMAgent:
     """Create LLMAgent that uses real Ollama (no custom llm_fn, uses default)"""
     config = AgentConfig(
         name="OllamaLLM",
-        model_config={
-            "model": ollama_model or "llama3.2:1b"
-        }
+        model_config=get_test_model_config("standard")
     )
     # Don't pass llm_fn - let it use the default Ollama integration
     return LLMAgent(config)
 
-@pytest.mark.skipif(not ollama_model, reason=skip_reason_ollama)
+@skip_if_no_ollama()
 def test_switch_keywords_routing():
     """Test SwitchAgent using keywords mode with LLMAgent using Ollama"""
     # Ensure we use the real prompts directory
@@ -45,7 +39,7 @@ def test_switch_keywords_routing():
     llm_agent = create_ollama_llm_agent()
     
     agents = {
-        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg), llm_agent.llm_fn),
+        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg)),
         "Billing": EchoAgent(AgentConfig(name="Billing")),
         "Support": EchoAgent(AgentConfig(name="Support")),
         "Sales":   EchoAgent(AgentConfig(name="Sales")),
@@ -57,7 +51,8 @@ def test_switch_keywords_routing():
     results = wm.run_workflow("Router", {"text": "Quero emitir boleto da minha fatura"})
     assert any(r.output for r in results)
     assert any(r.output.get("route") == "Billing" for r in results if hasattr(r, "output"))
-@pytest.mark.skipif(not ollama_model, reason=skip_reason_ollama)
+
+@skip_if_no_ollama()
 def test_switch_llm_routing():
     """Test SwitchAgent using LLM mode with real Ollama for routing decisions"""
     # Ensure we use the real prompts directory
@@ -78,7 +73,7 @@ def test_switch_llm_routing():
     llm_agent = create_ollama_llm_agent()
     
     agents = {
-        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg), llm_agent.llm_fn),
+        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg)),
         "Billing": EchoAgent(AgentConfig(name="Billing")),
         "Support": EchoAgent(AgentConfig(name="Support")),
         "Sales":   EchoAgent(AgentConfig(name="Sales")),
@@ -91,7 +86,7 @@ def test_switch_llm_routing():
     assert any(r.output for r in results)
     # In LLM mode, the LLM should determine the best route based on context
 
-@pytest.mark.skipif(not ollama_model, reason=skip_reason_ollama)
+@skip_if_no_ollama()
 def test_switch_hybrid_routing():
     """Test SwitchAgent using hybrid mode with real Ollama when keywords fail"""
     # Ensure we use the real prompts directory
@@ -112,7 +107,7 @@ def test_switch_hybrid_routing():
     llm_agent = create_ollama_llm_agent()
     
     agents = {
-        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg), llm_agent.llm_fn),
+        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg)),
         "Billing": EchoAgent(AgentConfig(name="Billing")),
         "Support": EchoAgent(AgentConfig(name="Support")),
         "Sales":   EchoAgent(AgentConfig(name="Sales")),
@@ -125,7 +120,7 @@ def test_switch_hybrid_routing():
     assert any(r.output for r in results)
     # In hybrid mode, should use LLM when keywords don't provide clear match
 
-@pytest.mark.skipif(not ollama_model, reason=skip_reason_ollama)
+@skip_if_no_ollama()
 def test_switch_hybrid_high_confidence():
     """Test SwitchAgent hybrid mode with high confidence LLM using real Ollama"""
     # Ensure we use the real prompts directory
@@ -146,7 +141,7 @@ def test_switch_hybrid_high_confidence():
     llm_agent = create_ollama_llm_agent()
     
     agents = {
-        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg), llm_agent.llm_fn),
+        "Router":  SwitchAgent(AgentConfig(name="Router", model_config=routes_cfg)),
         "Billing": EchoAgent(AgentConfig(name="Billing")),
         "Support": EchoAgent(AgentConfig(name="Support")),
         "Sales":   EchoAgent(AgentConfig(name="Sales")),

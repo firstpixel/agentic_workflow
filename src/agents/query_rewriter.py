@@ -1,13 +1,9 @@
 from __future__ import annotations
-from typing import Any, Dict, Optional, List, Protocol
+from typing import Any, Dict, Optional, List
 import os, requests, re
 
-from src.core.agent import BaseAgent, AgentConfig, LLMAgent, load_prompt_text, SafeDict
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent
 from src.core.types import Message, Result
-
-
-class LLMCallable(Protocol):
-    def __call__(self, prompt: str, **kwargs) -> str: ...
 
 
 # ---------- Parsers de Markdown ----------
@@ -53,18 +49,21 @@ def _extract_rationale(md: str) -> List[str]:
 
 class QueryRewriterAgent(BaseAgent):
     """
-    Reescreve a query usando LLMAgent para Ollama integration:
-      - Usa LLMAgent com prompt_file para gerar Markdown
-      - Faz parsing do Markdown e retorna:
-          output = {"query": <rewritten>, "rationale": [...], "md": <raw>}
+    Agent que reescreve queries em Markdown:
+    ### REWRITTEN QUERY
+    [nova query]
+    ### RATIONALE
+    - [motivo 1]
+    - [motivo 2]
+
     Entrada esperada: Message.data com "question" OU "query".
     Opcional: "hints_md" (string) para enriquecer o prompt.
     """
 
-    def __init__(self, config: AgentConfig, llm_fn: Optional[LLMCallable] = None):
+    def __init__(self, config: AgentConfig):
         super().__init__(config)
         # Create an internal LLMAgent for Ollama communication
-        self.llm_agent = LLMAgent(config, llm_fn)
+        self.llm_agent = LLMAgent(config)
 
     def _build_user_message(self, message: Message) -> Message:
         """Build the user message with context for the LLMAgent."""
@@ -72,11 +71,14 @@ class QueryRewriterAgent(BaseAgent):
         question = d.get("question") or d.get("query") or str(message.data)
         hints_md = d.get("hints_md") or d.get("contexts_md") or ""
         
+        # Build the user prompt for LLMAgent
+        user_prompt = f"Question: {question}"
+        if hints_md:
+            user_prompt += f"\n\nContext: {hints_md}"
+        
         # Build the user message data
         user_data = {
-            "question": question,
-            "hints_md": hints_md,
-            "text": f"Please rewrite this query: {question}"
+            "user_prompt": user_prompt
         }
         
         return Message(data=user_data, meta=message.meta)

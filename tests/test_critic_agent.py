@@ -8,21 +8,7 @@ from src.core.types import Message, Result
 from src.agents.critic_agent import CriticAgent
 from src.core.workflow_manager import WorkflowManager
 from src.core.agent import BaseAgent
-
-# --- Ollama configuration ---
-ollama_host = os.getenv("OLLAMA_HOST", "http://localhost:11434")
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason_ollama = "Set OLLAMA_MODEL (e opcional OLLAMA_HOST) para rodar este teste."
-
-
-# --- helpers para configurar PROMPT_DIR ---
-@pytest.fixture(scope="module")
-def setup_prompts():
-    # Use the actual prompts folder
-    import pathlib
-    prompts_dir = pathlib.Path(__file__).parent.parent / "prompts"
-    os.environ["PROMPT_DIR"] = str(prompts_dir)
-    return prompts_dir
+from tests.test_utils import setup_prompts, get_test_model_config, skip_if_no_ollama
 
 
 # --- dummies de LLM para o crítico ---
@@ -52,10 +38,13 @@ class DoneAgent(BaseAgent):
 def test_critic_repeat_on_low_score(setup_prompts):
     critic = CriticAgent(AgentConfig(
         name="Critic",
+        prompt_file="critic_agent.md",
         model_config={
-            "rubric": ["A"], "threshold": 7.5, "max_iters": 2, "prompt_file": "critic_agent.md"
+            "rubric": ["A"], "threshold": 7.5, "max_iters": 2
         }
-    ), llm_fn=critic_llm_low)
+    ))
+    # Override internal LLM agent for testing
+    critic.llm_agent.run = lambda msg: Result.ok(output={"text": critic_llm_low(msg.data["user_prompt"])})
 
     msg = Message(data={"text": "short"}, meta={"iteration": 0})
     res = critic.execute(msg)
@@ -67,10 +56,13 @@ def test_critic_repeat_on_low_score(setup_prompts):
 def test_critic_goto_on_pass(setup_prompts):
     critic = CriticAgent(AgentConfig(
         name="Critic",
+        prompt_file="critic_agent.md",
         model_config={
-            "rubric": ["A"], "threshold": 7.5, "max_iters": 2, "next_on_pass": "Done", "prompt_file": "critic_agent.md"
+            "rubric": ["A"], "threshold": 7.5, "max_iters": 2, "next_on_pass": "Done"
         }
-    ), llm_fn=critic_llm_high)
+    ))
+    # Override internal LLM agent for testing
+    critic.llm_agent.run = lambda msg: Result.ok(output={"text": critic_llm_high(msg.data["user_prompt"])})
 
     msg = Message(data={"text": "long enough"}, meta={"iteration": 0})
     res = critic.execute(msg)
@@ -82,10 +74,13 @@ def test_critic_goto_on_pass(setup_prompts):
 def test_critic_invalid_markdown_triggers_repeat(setup_prompts):
     critic = CriticAgent(AgentConfig(
         name="Critic",
+        prompt_file="critic_agent.md",
         model_config={
-            "rubric": ["A"], "threshold": 7.5, "max_iters": 1, "prompt_file": "critic_agent.md"
+            "rubric": ["A"], "threshold": 7.5, "max_iters": 1
         }
-    ), llm_fn=critic_llm_invalid_markdown)
+    ))
+    # Override internal LLM agent for testing
+    critic.llm_agent.run = lambda msg: Result.ok(output={"text": critic_llm_invalid_markdown(msg.data["user_prompt"])})
 
     msg = Message(data={"text": "anything"}, meta={"iteration": 0})
     res = critic.execute(msg)
@@ -94,13 +89,20 @@ def test_critic_invalid_markdown_triggers_repeat(setup_prompts):
 
 
 def test_integration_writer_critic_flow(setup_prompts):
-    writer = LLMAgent(AgentConfig(name="Writer", prompt_file=None), llm_fn=writer_llm)
+    writer = LLMAgent(AgentConfig(name="Writer", prompt_file="tech_writer.md"))
+    # Override writer for testing
+    writer.run = lambda msg: Result.ok(output={"text": writer_llm(msg.data["user_prompt"])})
+    
     critic = CriticAgent(AgentConfig(
         name="Critic",
+        prompt_file="critic_agent.md",
         model_config={
-            "rubric": ["A"], "threshold": 7.5, "max_iters": 2, "next_on_pass": "Done", "prompt_file": "critic_agent.md"
+            "rubric": ["A"], "threshold": 7.5, "max_iters": 2, "next_on_pass": "Done"
         }
-    ), llm_fn=critic_llm_high)
+    ))
+    # Override internal LLM agent for testing
+    critic.llm_agent.run = lambda msg: Result.ok(output={"text": critic_llm_high(msg.data["user_prompt"])})
+    
     done = DoneAgent(AgentConfig(name="Done"))
 
     agents = {"Writer": writer, "Critic": critic, "Done": done}
@@ -115,34 +117,35 @@ def test_integration_writer_critic_flow(setup_prompts):
 # --- Helper function to create Ollama LLMAgent ---
 def create_ollama_llm_agent() -> LLMAgent:
     """Create LLMAgent that uses real Ollama (no custom llm_fn, uses default)"""
+    model_config = get_test_model_config("standard")
     config = AgentConfig(
         name="OllamaLLM",
-        model_config={
-            "model": ollama_model or "llama3.2:1b"
-        }
+        model_config=model_config
     )
     # Don't pass llm_fn - let it use the default Ollama integration
     return LLMAgent(config)
 
 # --- Test with real Ollama ---
-@pytest.mark.skipif(not ollama_model, reason=skip_reason_ollama)
+@skip_if_no_ollama()
 def test_critic_agent_with_ollama(setup_prompts):
     """Test CriticAgent using LLMAgent with real Ollama integration."""
     
     # Create LLMAgent that uses real Ollama
     llm_agent = create_ollama_llm_agent()
     
-    # Create CriticAgent with LLMAgent's llm_fn
+    # Create CriticAgent with proper configuration
+    model_config = get_test_model_config("standard")
+    model_config.update({
+        "rubric": ["Clarity and structure", "Technical accuracy"], 
+        "threshold": 7.0, 
+        "max_iters": 1,
+    })
+    
     critic_default = CriticAgent(AgentConfig(
         name="CriticOllama",
-        model_config={
-            "rubric": ["Clarity and structure", "Technical accuracy"], 
-            "threshold": 7.0, 
-            "max_iters": 1,
-            "prompt_file": "critic_agent.md",
-            "model": ollama_model
-        }
-    ), llm_fn=llm_agent.llm_fn)  # Use LLMAgent's Ollama integration
+        prompt_file="critic_agent.md",
+        model_config=model_config
+    ))  # Uses internal LLMAgent for Ollama integration
 
     # Test with some text
     msg = Message(data={"text": "This is a very detailed and comprehensive technical document with clear structure and accurate information."}, meta={"iteration": 0})

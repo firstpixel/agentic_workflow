@@ -3,13 +3,18 @@ from typing import List, Dict, Any, Optional
 import os, uuid
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
+from src.config.settings import get_settings
 
 from .embeddings import OllamaEmbeddings
 
 class QdrantVectorStore:
     def __init__(self, url: str | None = None, collection: str = "agentic_docs",
                  embed_model: str | None = None):
-        self.url = url or os.getenv("QDRANT_URL","http://localhost:6333")
+        if url is None:
+            settings = get_settings()
+            self.url = settings.qdrant_url
+        else:
+            self.url = url
         self.collection = collection
         self.client = QdrantClient(url=self.url)
         self.embedder = OllamaEmbeddings(model=embed_model)

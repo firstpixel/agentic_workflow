@@ -2,7 +2,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Dict, Optional, List
 
-from src.core.agent import BaseAgent, AgentConfig, LLMAgent, load_prompt_text, SafeDict
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent
 from src.core.types import Message, Result
 
 
@@ -55,7 +55,9 @@ class ApprovalGateAgent(BaseAgent):
             model_config=mc
         )
         summarizer = LLMAgent(llm_cfg)
-        res = summarizer.execute(Message(data={"content_md": content_md}))
+        # Create user prompt with content for new LLMAgent interface
+        user_prompt = f"Content to summarize: {content_md}"
+        res = summarizer.execute(Message(data={"user_prompt": user_prompt}))
         if res.success and isinstance(res.output, dict):
             return res.output.get("text", "") or ""
         return ""
@@ -98,7 +100,8 @@ class ApprovalGateAgent(BaseAgent):
                         "status":"APPROVED",
                         "comment":comment,
                         "text": enhanced_content,
-                        "message_text": enhanced_content  # For prompt compatibility
+                        "message_text": enhanced_content,  # For prompt compatibility
+                        "user_prompt": enhanced_content  # For LLMAgent downstream compatibility
                     },
                     display_output=disp,
                     control=ctrl

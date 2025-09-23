@@ -2,10 +2,15 @@ from __future__ import annotations
 from typing import List, Dict, Any
 import os, time
 from pymongo import MongoClient, ASCENDING
+from src.config.settings import get_settings
 
 class MongoSTM:
     def __init__(self, uri: str | None = None, db_name: str = "agentic", coll_name: str = "stm"):
-        self.uri = uri or os.getenv("MONGODB_URI","mongodb://localhost:27017")
+        if uri is None:
+            settings = get_settings()
+            self.uri = settings.mongo_uri
+        else:
+            self.uri = uri
         self.client = MongoClient(self.uri)
         self.db = self.client[db_name]
         self.coll = self.db[coll_name]
