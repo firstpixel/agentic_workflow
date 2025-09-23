@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import json
 import re
 
-from src.core.agent import BaseAgent, AgentConfig, LLMCallable, load_prompt_text, SafeDict
+from src.core.agent import BaseAgent, AgentConfig, LLMAgent, LLMCallable, load_prompt_text, SafeDict
 from src.core.types import Message, Result
 
 
@@ -111,6 +111,8 @@ class SwitchAgent(BaseAgent):
     def __init__(self, config: AgentConfig, llm_fn: LLMCallable):
         super().__init__(config)
         self.llm_fn = llm_fn
+        # Create internal LLMAgent for consistent Ollama integration
+        self.llm_agent = LLMAgent(config, llm_fn)
 
     # ------------------------ API principal ----------------------------
 
@@ -230,7 +232,19 @@ class SwitchAgent(BaseAgent):
         }))
 
         try:
-            llm_raw = self.llm_fn(prompt, **self.config.model_config)
+            # Create a message for LLMAgent
+            user_message = Message(data={
+                "text": f"Please route this query: {text}",
+                "route_options": json.dumps(options, ensure_ascii=False)
+            })
+            
+            # Use LLMAgent for consistent Ollama integration
+            llm_result = self.llm_agent.run(user_message)
+            
+            if not llm_result.success:
+                return None, 0.0, {"llm_error": f"LLM call failed: {llm_result.output}"}
+                
+            llm_raw = llm_result.output.get("text", "")
         except Exception as e:
             # if LLM unavailable, return None to fall back
             return None, 0.0, {"llm_error": str(e)}

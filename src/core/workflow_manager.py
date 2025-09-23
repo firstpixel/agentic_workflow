@@ -407,6 +407,42 @@ class WorkflowManager:
 
         return results
 
+    async def route_message(self, message_data: Dict[str, Any], target_agent: str) -> Dict[str, Any]:
+        """
+        Route a message directly to a specific agent for Updater coordination.
+        
+        Args:
+            message_data: The message data to send
+            target_agent: The target agent name
+            
+        Returns:
+            Result from the target agent
+        """
+        if target_agent not in self.agents:
+            return {"success": False, "error": f"Agent {target_agent} not found"}
+        
+        try:
+            message = Message(data=message_data, meta={"source": "updater"})
+            agent = self.agents[target_agent]
+            
+            # Apply any pending overrides
+            overrides = self.run_overrides.get(target_agent, {})
+            
+            result = await agent.process(message, **overrides)
+            
+            return {
+                "success": result.success,
+                "data": result.data,
+                "error": result.error,
+                "overrides": result.overrides
+            }
+            
+        except Exception as e:
+            return {
+                "success": False, 
+                "error": f"Exception in {target_agent}: {str(e)}"
+            }
+
     @staticmethod
     def _merge_messages(messages: List[Message]) -> Message:
         if len(messages) == 1:

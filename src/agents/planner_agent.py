@@ -190,8 +190,10 @@ class PlannerAgent(BaseAgent):
             print(f"    output keys: {list(res.output.keys()) if isinstance(res.output, dict) else 'not dict'}")
             if res.success:
                 output = (res.output.get("text") or "").strip()
-                print(f"🔍 [DEBUG] LLM response for {stage} ({len(output)} chars):")
-                print(f"    output: {output[:500]}{'...' if len(output) > 500 else ''}")
+                print(f"🔍 [DEBUG] FULL LLM response for {stage} ({len(output)} chars):")
+                print("=" * 80)
+                print(output)
+                print("=" * 80)
             else:
                 print(f"❌ [DEBUG] Stage failed: {res}")
                 output = ""
@@ -224,7 +226,7 @@ class PlannerAgent(BaseAgent):
         # 1) Decompose
         print(f"\n📋 [DEBUG] Step 1: Decomposing...")
         md_decomp = self._call_stage("decomposer", {"request": text})
-        print(f"📋 [DEBUG] Raw decomposer output ({len(md_decomp)} chars): {md_decomp[:500]}{'...' if len(md_decomp) > 500 else ''}")
+        print(f"📋 [DEBUG] Raw decomposer output ({len(md_decomp)} chars) - ALREADY PRINTED ABOVE")
         
         draft_tasks = _parse_tasks(md_decomp)
         deps = _parse_deps(md_decomp)
@@ -271,7 +273,7 @@ class PlannerAgent(BaseAgent):
         })
         summary_md = (_OVERALL_SUMMARY.search(md_summary).group("body").strip()
                       if _OVERALL_SUMMARY.search(md_summary) else md_summary.strip())
-        print(f"📝 [DEBUG] Summary: {summary_md[:200]}{'...' if len(summary_md) > 200 else ''}")
+        print(f"📝 [DEBUG] Summary - ALREADY PRINTED ABOVE")
 
         # 3) Detail (sequential)
         print(f"\n🔍 [DEBUG] Step 3: Detailing tasks...")
@@ -285,7 +287,7 @@ class PlannerAgent(BaseAgent):
                 "overall_summary_md": summary_md
             })
             tasks_md.append(md_detail.strip())
-            print(f"🔍 [DEBUG] Task {tid} detailed: {md_detail[:100]}{'...' if len(md_detail) > 100 else ''}")
+            print(f"🔍 [DEBUG] Task {tid} detailed - ALREADY PRINTED ABOVE")
 
         # 4) Merge
         print(f"\n🔗 [DEBUG] Step 4: Merging...")
@@ -315,8 +317,7 @@ class PlannerAgent(BaseAgent):
             pass
 
         final_plan_md = md_merger.strip()
-        print(f"\n🏁 [DEBUG] Final plan prepared:")
-        print(f"🏁 [DEBUG] final_plan_md: {final_plan_md[:300]}{'...' if len(final_plan_md) > 300 else ''}")
+        print(f"\n🏁 [DEBUG] Final plan prepared - ALREADY PRINTED ABOVE")
         
         plan_meta = {
             "executor_agent": executor_agent,
