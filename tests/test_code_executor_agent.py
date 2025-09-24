@@ -12,8 +12,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 # Add project root to path
+
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
+
 
 from src.agents.code_executor_agent import CodeExecutorAgent
 from src.core.agent import AgentConfig
@@ -70,6 +72,7 @@ def test_find_task_in_plan(code_executor_agent):
     assert task_details is None
 
 
+
 def test_parse_execution_plan_markdown(code_executor_agent):
     """Test parsing execution plan from markdown response"""
     markdown_response = '''
@@ -123,9 +126,11 @@ def test_parse_execution_plan_fallback(code_executor_agent):
     
     plan = code_executor_agent._parse_execution_plan(response)
     assert plan is not None
+
     assert len(plan["files"]) == 1  # File extracted from bash script
     assert len(plan["scripts"]) == 1  # Bash script
     assert plan["files"][0]["path"] == "src/hello.py"
+
 
 
 def test_create_file(code_executor_agent, temp_project_dir):

@@ -12,7 +12,9 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+
 import shlex
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import json
@@ -157,6 +159,7 @@ class CodeExecutorAgent(BaseAgent):
             return None
     
     def _parse_execution_plan(self, llm_response: str) -> Optional[Dict[str, Any]]:
+
         """Parse LLM markdown response with bash code blocks into execution plan"""
         try:
             plan = {
@@ -165,6 +168,7 @@ class CodeExecutorAgent(BaseAgent):
                 "tests": []
             }
             
+
             # Extract bash code blocks
             bash_blocks = re.findall(r'```bash\s*\n(.*?)\n\s*```', llm_response, re.DOTALL)
             
@@ -203,6 +207,7 @@ class CodeExecutorAgent(BaseAgent):
                         "type": "javascript",
                         "file": js_file["path"],
                         "description": f"Validate JavaScript syntax for {js_file['path']}"
+
                     })
             
             return plan if (plan["files"] or plan["scripts"]) else None
@@ -211,6 +216,7 @@ class CodeExecutorAgent(BaseAgent):
             print(f"❌ Exception parsing execution plan: {e}")
             return None
     
+
     def _extract_files_from_bash(self, bash_code: str) -> List[Dict[str, Any]]:
         """Extract file creation commands from bash script"""
         files = []
@@ -262,6 +268,7 @@ class CodeExecutorAgent(BaseAgent):
         
         return files
     
+
     def _execute_plan(self, plan: Dict[str, Any], task_id: str) -> List[Dict[str, Any]]:
         """Execute the generated plan"""
         results = []
@@ -316,13 +323,17 @@ class CodeExecutorAgent(BaseAgent):
             # Create temporary script file
             with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
                 f.write("#!/bin/bash\n")
+
                 f.write(f"cd {shlex.quote(str(task_dir))}\n")  # Safely escape the task directory path
+
                 f.write(code)
                 script_path = f.name
             
             try:
+
                 # Make script executable (owner only for security)
                 os.chmod(script_path, 0o700)
+
                 
                 # Execute script
                 result = subprocess.run(
@@ -381,6 +392,7 @@ class CodeExecutorAgent(BaseAgent):
             
             # Security check: ensure path is within task directory
             target_path = (task_dir / file_path).resolve()
+
             try:
                 # Use more robust path validation (Python 3.9+)
                 if not target_path.is_relative_to(task_dir.resolve()):
@@ -397,7 +409,7 @@ class CodeExecutorAgent(BaseAgent):
                         "success": False,
                         "message": f"Path {file_path} outside allowed directory"
                     }
-            
+
             # Check file extension
             if target_path.suffix not in self.allowed_extensions:
                 return {

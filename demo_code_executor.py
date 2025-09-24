@@ -12,10 +12,9 @@ import json
 from pathlib import Path
 from unittest.mock import patch
 
-# Ensure the project root is in sys.path for src imports
-project_root = Path(__file__).resolve().parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
+# Add src to Python path
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+
 from src.agents.code_executor_agent import CodeExecutorAgent
 from src.core.agent import AgentConfig
 from src.core.types import Message, Result

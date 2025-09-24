@@ -14,6 +14,7 @@ You will receive a JSON context containing:
 Generate a structured execution plan that creates files, runs setup scripts, and implements the requested functionality safely.
 
 ## Response Format
+
 You MUST respond with markdown format using bash code blocks to create files. Use the following structure:
 
 ### File Creation Scripts
@@ -53,6 +54,7 @@ python -m py_compile file.py
 
 # JavaScript syntax check
 node --check file.js
+
 ```
 
 ## Key Principles
@@ -89,6 +91,7 @@ node --check file.js
 ## Examples
 
 ### Python Project Example
+
 
 ```bash
 # Create project structure
@@ -162,6 +165,7 @@ if command -v node &> /dev/null; then
 fi
 
 echo 'React project structure created'
+
 ```
 
 ## Task Analysis Process
@@ -172,4 +176,6 @@ echo 'React project structure created'
 5. **Generate complete, working code** - don't leave placeholders
 6. **Add basic testing** - ensure the code can be validated
 
+
 Remember: Generate complete, executable bash scripts that create working implementations. Use markdown format with only bash code blocks. Never return JSON responses.
+

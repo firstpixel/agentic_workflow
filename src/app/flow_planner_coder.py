@@ -69,7 +69,7 @@ def build_planner_coder_flow(
         executor_config = {**base_executor_config, **executor_model_config, **{"project_root": project_root}}
     else:
         executor_config = {**base_executor_config, "project_root": project_root}
-    
+
     executor = CodeExecutorAgent(AgentConfig(
         name=executor_agent_name,
         prompt_file="code_executor.md",

@@ -97,6 +97,24 @@ This framework provides a production-ready implementation of 20 essential agenti
 - **Files**: `src/agents/planner_agent.py`, `src/app/flows_planner.py`
 - **Example**: Research project planning and execution
 
+### 6.1 **Code Execution & File Creation** 
+*Automated code generation, file creation, and safe script execution*
+
+```
+[Planning Agent] → [CodeExecutor Agent] → [File Creation]
+                                       → [Script Execution]
+                                       → [Testing & Validation]
+```
+
+**Implementation**: `CodeExecutorAgent` with safe sandboxed execution
+- **Files**: `src/agents/code_executor_agent.py`, `src/app/flow_planner_coder.py`
+- **Features**: 
+  - Automated file and folder structure creation
+  - Python, JavaScript, and bash script execution
+  - Safety checks and path validation
+  - Basic syntax testing and validation
+- **Example**: Complete project generation from high-level requirements
+
 ### 7. **Multi-Agent Collaboration**
 *Coordinated teamwork with shared memory*
 
@@ -449,6 +467,33 @@ message = Message(data={
     "memory_manager": memory
 })
 result = rag_agent.execute(message)
+```
+
+### Code Execution and File Creation
+
+```python
+from src.agents.code_executor_agent import CodeExecutorAgent
+from src.app.flow_planner_coder import build_planner_coder_flow, demo_planner_coder
+
+# Create code executor for automated file creation
+executor = CodeExecutorAgent(AgentConfig(
+    name="CodeExecutor",
+    prompt_file="code_executor.md",
+    model_config={
+        "project_root": "./my_project",
+        "enable_execution": True,
+        "allowed_extensions": [".py", ".js", ".html", ".css", ".md"]
+    }
+))
+
+# Use with planning flow for complete project generation
+demo_planner_coder(
+    "Create a Python calculator with tests",
+    "calculator_project"
+)
+
+# Or run the demo script
+# python demo_code_executor.py
 ```
 
 ### Human-in-the-Loop Approval

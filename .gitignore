@@ -272,3 +272,7 @@ secrets.json
 
 # OS generated files
 .directory
+
+# CodeExecutorAgent output directories
+demo_output/
+output/
