@@ -6,60 +6,45 @@ from src.memory.mongo_stm import MongoSTM
 from src.memory.qdrant_store import QdrantVectorStore
 from src.memory.memory_manager import MemoryManager
 from src.agents.rag_retriever import RAGRetrieverAgent
+from tests.test_utils import skip_if_no_ollama, get_test_model_config, skip_if_no_databases
 
-# Check and log current environment configuration
-print("🔍 RAG Test Environment Check:")
-ollama_model = os.getenv("OLLAMA_MODEL")
-qdrant_url = os.getenv("QDRANT_URL") 
-mongodb_uri = os.getenv("MONGODB_URI")
-
-print(f"   OLLAMA_MODEL: {ollama_model or '❌ NOT SET'}")
-print(f"   QDRANT_URL: {qdrant_url or '❌ NOT SET (should be http://localhost:6333)'}")
-print(f"   MONGODB_URI: {mongodb_uri or '❌ NOT SET (should be mongodb://localhost:27017)'}")
-
-need_envs = not (ollama_model and qdrant_url and mongodb_uri)
-skip_reason = "Set OLLAMA_MODEL, QDRANT_URL, MONGODB_URI to run this test with real services."
-
-if need_envs:
-    print("⚠️  RAG test will be skipped. To enable:")
-    print("   export OLLAMA_MODEL=llama3.2:1b")
-    print("   export QDRANT_URL=http://localhost:6333") 
-    print("   export MONGODB_URI=mongodb://localhost:27017")
-else:
-    print("✅ All environment variables set - RAG test will run")
-
-@pytest.mark.skipif(need_envs, reason=skip_reason)
+@skip_if_no_ollama()
+@skip_if_no_databases()
 def test_task5_rag_end_to_end():
+    from src.config.settings import get_settings
+    settings = get_settings()
+    model_config = get_test_model_config("standard", temperature=0.1)
+    
     print("🚀 Starting RAG end-to-end test...")
-    print("� Using existing prompt files from prompts/ directory...")
+    print("🔧 Using existing prompt files from prompts/ directory...")
     
     # Test Qdrant connection
     try:
         import requests
-        qdrant_health = requests.get(f"{qdrant_url}/", timeout=5)  # Use root endpoint instead of /health
-        print(f"   Qdrant ({qdrant_url}): {'✅ Connected' if qdrant_health.status_code == 200 else '❌ Connection failed'}")
+        qdrant_health = requests.get(f"{settings.qdrant_url}/", timeout=5)  # Use root endpoint instead of /health
+        print(f"   Qdrant ({settings.qdrant_url}): {'✅ Connected' if qdrant_health.status_code == 200 else '❌ Connection failed'}")
     except Exception as e:
-        print(f"   Qdrant ({qdrant_url}): ❌ Connection error - {e}")
+        print(f"   Qdrant ({settings.qdrant_url}): ❌ Connection error - {e}")
     
     # Test MongoDB connection
     try:
         from pymongo import MongoClient
-        mongo_client = MongoClient(mongodb_uri, serverSelectionTimeoutMS=5000)
+        mongo_client = MongoClient(settings.mongo_uri, serverSelectionTimeoutMS=5000)
         mongo_client.server_info()  # This will raise an exception if MongoDB is not reachable
-        print(f"   MongoDB ({mongodb_uri}): ✅ Connected")
+        print(f"   MongoDB ({settings.mongo_uri}): ✅ Connected")
         mongo_client.close()
     except Exception as e:
-        print(f"   MongoDB ({mongodb_uri}): ❌ Connection error - {e}")
+        print(f"   MongoDB ({settings.mongo_uri}): ❌ Connection error - {e}")
     
     # Test Ollama model availability
     try:
         from src.app.main import create_ollama_llm_agent, check_ollama_availability
-        if check_ollama_availability(ollama_model):
-            print(f"   Ollama ({ollama_model}): ✅ Available")
+        if check_ollama_availability(model_config["model"]):
+            print(f"   Ollama ({model_config['model']}): ✅ Available")
         else:
-            print(f"   Ollama ({ollama_model}): ❌ Not available")
+            print(f"   Ollama ({model_config['model']}): ❌ Not available")
     except Exception as e:
-        print(f"   Ollama ({ollama_model}): ❌ Error checking availability - {e}")
+        print(f"   Ollama ({model_config['model']}): ❌ Error checking availability - {e}")
     
     print("📝 Setting up test environment...")
     
@@ -77,8 +62,7 @@ def test_task5_rag_end_to_end():
 
     print("🤖 Setting up agents...")
     retriever = RAGRetrieverAgent(AgentConfig(name="Retriever", model_config={"top_k":2}), memory)
-    model_cfg = {"model": ollama_model, "options": {"temperature": 0.1}}
-    answerer  = LLMAgent(AgentConfig(name="Answerer", prompt_file="answer_with_context.md", model_config=model_cfg))
+    answerer  = LLMAgent(AgentConfig(name="Answerer", prompt_file="answer_with_context.md", model_config=model_config))
 
     agents={"Retriever":retriever,"Answerer":answerer}
     graph ={"Retriever":["Answerer"],"Answerer":[]}

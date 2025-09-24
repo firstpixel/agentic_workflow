@@ -18,6 +18,14 @@ class NodeState:
     attempts: int = 0  # retry counter for the *current* execution window
     retry_history: List[Dict[str, Any]] = field(default_factory=list)  # persisted per-run retry log
 
+    def reset(self) -> None:
+        """Reset all fields except retry_history for a fresh workflow run."""
+        self.expected_inputs = 1
+        self.received.clear()
+        self.last_producer = None
+        self.attempts = 0
+        # retry_history intentionally persists until explicitly cleared
+
 
 class WorkflowManager:
     def __init__(
@@ -28,6 +36,8 @@ class WorkflowManager:
         node_policies: Optional[Dict[str, Dict[str, Any]]] = None,
     ):
         """
+        Manages a workflow graph of agents, node states, and retry/fallback logic.
+
         node_policies (optional) example:
         {
             "Author": {"max_retries": 2, "on_error": "FallbackAuthor", "retry_on_failure": True},
@@ -59,21 +69,22 @@ class WorkflowManager:
             indeg.setdefault(n, 0)
         return dict(indeg)
 
-    def _enqueue(self, q: Deque[Tuple[str, Message]], node: str, msg: Message):
+    def _enqueue(self, q: Deque[Tuple[str, Message]], node: str, msg: Message) -> None:
         q.append((node, msg))
 
     def _policy_for(self, node: str) -> Dict[str, Any]:
         """
         Returns safe per-node policy with conservative defaults for backward compatibility.
         """
-        pol = (self.node_policies.get(node, {}) or {}).copy()
+        pol = dict(self.node_policies.get(node, {}))
         pol.setdefault("max_retries", 0)
         pol.setdefault("on_error", None)
         pol.setdefault("retry_on_failure", False)  # keep old behavior unless explicitly enabled
         return pol
 
-    def _apply_overrides(self, agent_name: str, res: Result):
-        """Store overrides (prompt/model_config).
+    def _apply_overrides(self, agent_name: str, res: Result) -> None:
+        """
+        Store overrides (prompt/model_config).
         Supports two styles:
           1) legacy: res.overrides has direct keys for the same agent (applied when this agent runs again)
           2) targeted: res.overrides['for'] = { '<TargetAgent>': {'model_config': {...}, 'prompt_file': '...'} }
@@ -108,13 +119,21 @@ class WorkflowManager:
     def _next_nodes(self, current: str) -> List[str]:
         return self.graph.get(current, [])
 
+    def _safe_metric(self, method: str, *args, **kwargs) -> None:
+        """Safely call metrics method if present."""
+        if self.metrics and hasattr(self.metrics, method):
+            try:
+                getattr(self.metrics, method)(*args, **kwargs)
+            except Exception:
+                pass
+
     def _record_retry_event(
         self,
         node: str,
         ns: NodeState,
         event_type: str,
         details: Dict[str, Any],
-    ):
+    ) -> None:
         """
         Persist retry/fallback timeline in NodeState and notify metrics if present.
         event_type: "exception" | "failed_result" | "retry_enqueued" | "fallback"
@@ -125,22 +144,13 @@ class WorkflowManager:
             "attempt": ns.attempts,
             **details,
         }
+        if event_type == "exception":
+            entry["traceback"] = details.get("traceback", traceback.format_exc())
         ns.retry_history.append(entry)
+        self._safe_metric("on_retry_node", node, entry)
 
-        # optional external sink via metrics
-        if self.metrics and hasattr(self.metrics, "on_retry_node"):
-            try:
-                self.metrics.on_retry_node(node, entry)
-            except Exception:
-                # never let observability break the flow
-                pass
-
-    def _record_fallback_metrics(self, node: str, info: Dict[str, Any]):
-        if self.metrics and hasattr(self.metrics, "on_fallback_node"):
-            try:
-                self.metrics.on_fallback_node(node, info)
-            except Exception:
-                pass
+    def _record_fallback_metrics(self, node: str, info: Dict[str, Any]) -> None:
+        self._safe_metric("on_fallback_node", node, info)
 
     def get_retry_history(self) -> Dict[str, List[Dict[str, Any]]]:
         """
@@ -149,10 +159,18 @@ class WorkflowManager:
         return {n: st.retry_history[:] for n, st in self.state.items() if st.retry_history}
 
     def run_workflow(self, entry: str, input_data: Any) -> List[Result]:
+        """
+        Run the workflow from the entry node with provided input data.
+        Returns a list of all Results in execution order.
+        """
         results: List[Result] = []
         q: Deque[Tuple[str, Message]] = deque()
         self.state.clear()
         self.run_overrides.clear()
+
+        # Explicitly reset each NodeState object (if previously used)
+        for ns in self.state.values():
+            ns.reset()
 
         self._enqueue(q, entry, Message(data=input_data, meta={"root": input_data, "iteration": 0}))
 
@@ -162,8 +180,7 @@ class WorkflowManager:
             if not agent:
                 raise WorkflowError(f"Agent '{node}' not found")
 
-            if self.metrics:
-                self.metrics.on_start_node(node)
+            self._safe_metric("on_start_node", node)
 
             # Apply overrides targeted to *this* node
             overrides = self.run_overrides.get(node, {})
@@ -191,13 +208,12 @@ class WorkflowManager:
                 results.append(res)  # keep previous behavior: collect every Result
                 ns.last_producer = payload.meta.get("last_producer")
 
-                if self.metrics:
-                    self.metrics.on_end_node(node, {
-                        "success": res.success,
-                        "metrics": res.metrics,
-                        "control": res.control,
-                        "output": res.output
-                    })
+                self._safe_metric("on_end_node", node, {
+                    "success": res.success,
+                    "metrics": res.metrics,
+                    "control": res.control,
+                    "output": res.output
+                })
 
                 # Handle success==False as retryable (policy-controlled)
                 should_retry_for_failure = (
@@ -326,7 +342,7 @@ class WorkflowManager:
                 ns.attempts += 1
                 tb = traceback.format_exc()
 
-                # record exception event
+                # record exception event with traceback
                 self._record_retry_event(
                     node,
                     ns,
@@ -335,18 +351,15 @@ class WorkflowManager:
                         "max_retries": self._policy_for(node).get("max_retries", 0),
                         "error": str(e),
                         "exc_type": e.__class__.__name__,
+                        "traceback": tb
                     },
                 )
 
-                if self.metrics and hasattr(self.metrics, "on_error_node"):
-                    try:
-                        self.metrics.on_error_node(node, {
-                            "attempt": ns.attempts,
-                            "max_retries": self._policy_for(node).get("max_retries", 0),
-                            "error": str(e)
-                        })
-                    except Exception:
-                        pass
+                self._safe_metric("on_error_node", node, {
+                    "attempt": ns.attempts,
+                    "max_retries": self._policy_for(node).get("max_retries", 0),
+                    "error": str(e)
+                })
 
                 if ns.attempts <= int(self._policy_for(node).get("max_retries", 0)):
                     root_obj = payload.meta.get("root")
@@ -399,55 +412,58 @@ class WorkflowManager:
                 raise WorkflowError(f"Agent '{node}' failed after {ns.attempts} attempt(s): {e}") from e
 
         # Emit final retry history snapshot to metrics if supported
-        if self.metrics and hasattr(self.metrics, "on_retry_history_complete"):
-            try:
-                self.metrics.on_retry_history_complete(self.get_retry_history())
-            except Exception:
-                pass
+        self._safe_metric("on_retry_history_complete", self.get_retry_history())
 
         return results
 
     async def route_message(self, message_data: Dict[str, Any], target_agent: str) -> Dict[str, Any]:
         """
         Route a message directly to a specific agent for Updater coordination.
-        
+
         Args:
             message_data: The message data to send
             target_agent: The target agent name
-            
+
         Returns:
-            Result from the target agent
+            Result from the target agent as a dict.
         """
         if target_agent not in self.agents:
             return {"success": False, "error": f"Agent {target_agent} not found"}
-        
+
         try:
             message = Message(data=message_data, meta={"source": "updater"})
             agent = self.agents[target_agent]
-            
+
             # Apply any pending overrides
             overrides = self.run_overrides.get(target_agent, {})
-            
+
             result = await agent.process(message, **overrides)
-            
+
             return {
                 "success": result.success,
                 "data": result.data,
                 "error": result.error,
                 "overrides": result.overrides
             }
-            
+
         except Exception as e:
             return {
-                "success": False, 
+                "success": False,
                 "error": f"Exception in {target_agent}: {str(e)}"
             }
 
     @staticmethod
     def _merge_messages(messages: List[Message]) -> Message:
+        """
+        Merge messages for join nodes. If only one, return as is. Otherwise, pack data into a list.
+        """
         if len(messages) == 1:
             return messages[0]
         data = [m.data for m in messages]
         root = messages[0].meta.get("root")
         it = messages[0].meta.get("iteration", 0)
         return Message(data=data, meta={"root": root, "iteration": it})
+
+    # Optional: placeholder for structured logging, future use
+    def _log(self, level: str, msg: str, **kwargs) -> None:
+        pass  # Implement logging here if needed

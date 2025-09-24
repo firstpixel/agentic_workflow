@@ -208,7 +208,7 @@ def build_planner_flow(
         model_config=(executor_model_config or {})
     ))
 
-    graph = {"Planner": ["Updater"], "Executor": ["Updater"]}
+    graph = {"Planner": ["Updater"], "Updater": [executor_agent_name]}
     agents = {"Planner": planner, "Updater": updater, executor_agent_name: executor}
     node_policies: Dict[str, Dict[str, Any]] = {}
     return graph, agents, node_policies

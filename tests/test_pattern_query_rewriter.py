@@ -4,22 +4,19 @@ from pathlib import Path
 from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
 from src.agents.query_rewriter import QueryRewriterAgent
+from tests.test_utils import skip_if_no_ollama, get_test_model_config
 
-
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run this test with real Ollama."
-
-@pytest.mark.skipif(not ollama_model, reason=skip_reason)
+@skip_if_no_ollama()
 def test_query_rewriter_ollama():
+    model_config = get_test_model_config("standard", temperature=0.1)
+
     # Use existing prompt files from prompts/ directory
 
-    # Rewriter
-    rewriter_cfg = {"model": ollama_model, "options": {"temperature": 0.1}, "prompt_file": "query_rewriter.md"}
-    rewriter = QueryRewriterAgent(AgentConfig(name="QueryRewriter", model_config=rewriter_cfg))
+    # Rewriter - prompt_file should be in AgentConfig, not model_config
+    rewriter = QueryRewriterAgent(AgentConfig(name="QueryRewriter", prompt_file="query_rewriter.md", model_config=model_config))
 
     # Answerer (só para garantir que continuamos usando LLMAgent no pipeline)
-    answer_cfg = {"model": ollama_model, "options": {"temperature": 0.1}}
-    answerer = LLMAgent(AgentConfig(name="Answerer", prompt_file="answer_with_context.md", model_config=answer_cfg))
+    answerer = LLMAgent(AgentConfig(name="Answerer", prompt_file="answer_with_context.md", model_config=model_config))
 
     agents = {"QueryRewriter": rewriter, "Answerer": answerer}
     graph  = {"QueryRewriter": ["Answerer"], "Answerer": []}
@@ -33,4 +30,4 @@ def test_query_rewriter_ollama():
     # Verifica que o rewriter produziu uma query reescrita não vazia
     # (não validamos conteúdo exato por ser LLM real)
     out_queries = [r.output.get("query") for r in results if isinstance(r.output, dict) and "query" in r.output]
-    assert any(isinstance(q, str) and len(q.strip()) > 0 for q in out_queries)
+    assert any(isinstance(q, str) and len(q.strip()) > 0 for q in out_queries), f"No valid queries found in outputs: {[r.output for r in results]}"

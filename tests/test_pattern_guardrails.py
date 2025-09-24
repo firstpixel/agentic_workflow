@@ -4,29 +4,30 @@ from pathlib import Path
 from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
 from src.agents.guardrails_agent import GuardrailsAgent
+from tests.test_utils import skip_if_no_ollama, get_test_model_config
 
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run this test with real Ollama."
-
-@pytest.mark.skipif(not ollama_model, reason=skip_reason)
+@skip_if_no_ollama()
 def test_task6_guardrails_with_ollama():
     # Use existing prompt files from prompts/ directory
+    
+    # Get model config from centralized settings
+    guard_model_config = get_test_model_config("standard", temperature=0.0)
+    guard_model_config.update({
+        "pii_redact": True,
+        "moderation_mode": "hybrid",
+        "moderation_prompt_file": "moderation.md"
+    })
 
     guard = GuardrailsAgent(AgentConfig(
-        name="Guardrails",
-        model_config={
-            "pii_redact": True,
-            "moderation_mode": "hybrid",
-            "moderation_prompt_file": "moderation.md",
-            "model": ollama_model,
-            "options": {"temperature": 0.0}
-        }
+        name="Guardrails", 
+        prompt_file="moderation.md",
+        model_config=guard_model_config
     ))
 
     writer = LLMAgent(AgentConfig(
         name="Writer",
         prompt_file="tech_writer.md",
-        model_config={"model": ollama_model, "options": {"temperature": 0.1}}
+        model_config=get_test_model_config("standard", temperature=0.1)
     ))
 
     agents = {"Guardrails": guard, "Writer": writer}

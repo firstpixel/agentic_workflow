@@ -5,11 +5,9 @@ from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
 from src.eval.metrics import MetricsCollector
 from src.eval.evaluation import EvaluationRunner, EvalCase
+from tests.test_utils import skip_if_no_ollama, get_test_model_config
 
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run this test with real Ollama."
-
-@pytest.mark.skipif(not ollama_model, reason=skip_reason)
+@skip_if_no_ollama()
 def test_task8_metrics_and_eval_with_ollama(tmp_path, monkeypatch):
     # --- prompts em arquivos ---
     prompts = tmp_path / "prompts"
@@ -34,11 +32,13 @@ def test_task8_metrics_and_eval_with_ollama(tmp_path, monkeypatch):
     )
     monkeypatch.setenv("PROMPT_DIR", str(prompts))
 
+    model_config = get_test_model_config("standard", temperature=0.1)
+    
     # --- pipeline ---
     writer = LLMAgent(AgentConfig(
         name="Writer",
         prompt_file="tech_writer.md",
-        model_config={"model": ollama_model, "options": {"temperature": 0.1}}
+        model_config=model_config
     ))
     agents = {"Writer": writer}
     graph  = {"Writer": []}
@@ -62,7 +62,7 @@ def test_task8_metrics_and_eval_with_ollama(tmp_path, monkeypatch):
     assert res and res[0]["verdict"] in ("PASS","FAIL")
 
     # 2) llm judge (usa prompt eval_judge.md do PROMPT_DIR)
-    res_llm = runner.run(cases, judge="llm", llm_model_cfg={"model": ollama_model, "options":{"temperature":0.1}}, judge_prompt_file="eval_judge.md")
+    res_llm = runner.run(cases, judge="llm", llm_model_cfg=model_config, judge_prompt_file="eval_judge.md")
     assert res_llm and res_llm[0]["verdict"] in ("PASS","FAIL")
 
     # métricas coletadas

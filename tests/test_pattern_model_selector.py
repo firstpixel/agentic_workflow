@@ -4,16 +4,19 @@ from pathlib import Path
 from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
 from src.agents.model_selector import ModelSelectorAgent
+from tests.test_utils import skip_if_no_ollama, get_test_model_config
 
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run this test with real Ollama."
-
-@pytest.mark.skipif(not ollama_model, reason=skip_reason)
+@skip_if_no_ollama()
 def test_task9_model_selector_applies_overrides(tmp_path, monkeypatch):
-    # Use 3 different models like in main.py - force different models instead of using the same env var
-    model1 = "llama3.2:1b"
-    model2 = "llama3.2:3b" 
-    model3 = "gemma3:latest"
+    # Get the three different model configurations from settings
+    simple_config = get_test_model_config("simple", temperature=0.1)
+    standard_config = get_test_model_config("standard", temperature=0.3)  
+    complex_config = get_test_model_config("complex", temperature=0.6)
+    
+    # Extract model names for the three different complexity levels
+    model1 = simple_config["model"]    # Simple tasks
+    model2 = standard_config["model"]  # Standard tasks  
+    model3 = complex_config["model"]   # Complex tasks
     
     # Use the actual prompts folder instead of creating temporary ones
     # The PROMPT_DIR environment variable should point to the real prompts directory
@@ -23,7 +26,7 @@ def test_task9_model_selector_applies_overrides(tmp_path, monkeypatch):
         name="ModelSelector",
         prompt_file="model_router.md",  # Use the actual prompt file from prompts folder
         model_config={
-            "model": model2,  # Use the 3b model for better instruction following
+            "model": model1,  # Use the 3b model for better instruction following
             "options": {"temperature": 0.0},
             "classes": {
                 "SIMPLE":   {"model": model1, "options": {"temperature": 0.1}},

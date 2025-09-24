@@ -3,11 +3,9 @@ from pathlib import Path
 
 from src.app.flows import make_prompt_handoff_flow, make_guardrails_writer_flow
 from src.core.workflow_manager import WorkflowManager
+from tests.test_utils import skip_if_no_ollama, get_test_model_config
 
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run these flow tests with real Ollama."
-
-@pytest.mark.skipif(not ollama_model, reason=skip_reason)
+@skip_if_no_ollama()
 def test_flows_prompt_handoff_and_guardrails(tmp_path, monkeypatch):
     # prompts em arquivos
     prompts = tmp_path / "prompts"
@@ -45,8 +43,12 @@ def test_flows_prompt_handoff_and_guardrails(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PROMPT_DIR", str(prompts))
 
+    # Get model from centralized config
+    model_config = get_test_model_config("standard")
+    model = model_config.get("model")
+
     # 1) Prompt/Plan Handoff flow
-    fb1 = make_prompt_handoff_flow(model=ollama_model)
+    fb1 = make_prompt_handoff_flow(model=model)
     wm1 = fb1.manager()
     out1 = wm1.run_workflow("PromptAgent", {"text": "Explain telemetry. [[PARAGRAPH]]"})
 
@@ -60,7 +62,7 @@ def test_flows_prompt_handoff_and_guardrails(tmp_path, monkeypatch):
     assert has_plan_markers or has_telemetry_content
 
     # 2) Guardrails -> Writer
-    fb2 = make_guardrails_writer_flow(model=ollama_model)
+    fb2 = make_guardrails_writer_flow(model=model)
     wm2 = fb2.manager()
     out2 = wm2.run_workflow("Guardrails", {"text": "Email me at a@a.com. Draft the plan."})
     texts2 = [r.output.get("text") for r in out2 if isinstance(r.output, dict) and "text" in r.output]

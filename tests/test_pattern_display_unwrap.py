@@ -16,12 +16,13 @@ def test_display_unwrap_with_ollama(tmp_path, monkeypatch):
     # writer_unwrap.md força saída com cerca de código e espaços variados
     (prompts / "writer_unwrap.md").write_text(
         "You are a helpful assistant.\n"
-        "Return the following EXACT format:\n\n"
+        "When the user says anything, return the following EXACT format including the triple backticks:\n\n"
         "```\n"
-        "Line 1: {message_text}\n"
+        "Line 1: Hello, API telemetry!\n"
         "\n"
         "   Line 2 with trailing spaces   \n"
-        "```\n",
+        "```\n\n"
+        "IMPORTANT: Include the triple backticks (```) at the beginning and end.",
         encoding="utf-8"
     )
     monkeypatch.setenv("PROMPT_DIR", str(prompts))
@@ -36,7 +37,7 @@ def test_display_unwrap_with_ollama(tmp_path, monkeypatch):
     graph = {"Writer": []}
     wm = WorkflowManager(graph, agents)
 
-    msg = {"text": "Hello, API telemetry!"}
+    msg = {"user_prompt": "Hello, API telemetry!"}
     results = wm.run_workflow("Writer", msg)
 
     # Deve existir um output textual do Writer

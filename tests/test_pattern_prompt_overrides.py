@@ -4,11 +4,9 @@ from pathlib import Path
 from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
 from src.agents.prompt_switcher import PromptSwitcherAgent
+from tests.test_utils import skip_if_no_ollama, get_test_model_config
 
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run this test with real Ollama."
-
-@pytest.mark.skipif(not ollama_model, reason=skip_reason)
+@skip_if_no_ollama()
 def test_task10_prompt_overrides_with_ollama(tmp_path, monkeypatch):
     # Write prompts to disk (no inline prompt strings in code)
     prompts = tmp_path / "prompts"
@@ -35,19 +33,21 @@ def test_task10_prompt_overrides_with_ollama(tmp_path, monkeypatch):
 
     monkeypatch.setenv("PROMPT_DIR", str(prompts))
 
+    model_config_temp0 = get_test_model_config("standard", temperature=0.0)
+    model_config_temp01 = get_test_model_config("standard", temperature=0.1)
+    
     switcher = PromptSwitcherAgent(AgentConfig(
         name="PromptSwitcher",
         model_config={
             "prompt_file": "prompt_switcher.md",
-            "model": ollama_model,
-            "options": {"temperature": 0.0},
+            **model_config_temp0,
             "default_targets": {"Writer": "writer_bullets.md"}
         }
     ))
     writer = LLMAgent(AgentConfig(
         name="Writer",
         prompt_file="writer_bullets.md",
-        model_config={"model": ollama_model, "options": {"temperature": 0.1}}
+        model_config=model_config_temp01
     ))
 
     agents = {"PromptSwitcher": switcher, "Writer": writer}

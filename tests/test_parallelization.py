@@ -5,13 +5,10 @@ from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
 from src.agents.fanout_agent import FanOutAgent
 from src.agents.join_agent import JoinAgent
+from tests.test_utils import skip_if_no_ollama, get_test_model_config
 
 
-# ---- Skip se não houver Ollama configurado ----
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason_ollama = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run this test with real Ollama."
-
-@pytest.mark.skipif(not ollama_model, reason=skip_reason_ollama)
+@skip_if_no_ollama()
 def test_task4_parallelization_real_ollama():
     """
     Teste do padrão Paralelização (FanOut/Join) usando Ollama real.
@@ -19,7 +16,7 @@ def test_task4_parallelization_real_ollama():
     - Uses LLMAgent (default -> Ollama).
     """
 
-    model_cfg = {"model": ollama_model, "options": {"temperature": 0.1}}
+    model_cfg = get_test_model_config("standard", temperature=0.1)
 
     tech_writer = LLMAgent(AgentConfig(name="TechWriter", prompt_file="tech_writer.md", model_config=model_cfg))
     biz_writer  = LLMAgent(AgentConfig(name="BizWriter",  prompt_file="biz_writer.md",  model_config=model_cfg))

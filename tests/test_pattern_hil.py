@@ -1,15 +1,15 @@
-import os, pytest
+import os
+import pathlib
 from pathlib import Path
 
 from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
 from src.agents.approval_gate import ApprovalGateAgent
+from tests.test_utils import skip_if_no_ollama, get_test_model_config
 
-ollama_model = os.getenv("OLLAMA_MODEL", "")
-skip_reason = "Set OLLAMA_MODEL (and optional OLLAMA_HOST) to run this test with real Ollama."
-
-@pytest.mark.skipif(not ollama_model, reason=skip_reason)
+@skip_if_no_ollama()
 def test_task7_hil_with_ollama():
+    model_config = get_test_model_config("standard", temperature=0.1)
 
     # Gate e Writer
     approval = ApprovalGateAgent(AgentConfig(
@@ -17,14 +17,13 @@ def test_task7_hil_with_ollama():
         model_config={
             "summary_prompt_file": "approval_request.md",
             "next_on_approve": "Writer",
-            "model": ollama_model,
-            "options": {"temperature": 0.1}
+            **model_config
         }
     ))
     writer = LLMAgent(AgentConfig(
         name="Writer",
         prompt_file="tech_writer.md",
-        model_config={"model": ollama_model, "options": {"temperature": 0.1}}
+        model_config=model_config
     ))
 
     agents = {"ApprovalGate": approval, "Writer": writer}
