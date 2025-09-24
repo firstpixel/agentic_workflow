@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Demo script to test CodeExecutorAgent functionality without requiring Ollama
+Demo script to test CodeExecutorAgent functionality with optional real LLM integration
 
 This script demonstrates the core functionality of the CodeExecutorAgent
-by mocking the LLM responses to simulate code generation and execution.
+by default using mocked LLM responses, but can optionally use real LLM via LLMAgent
+when --use-real-llm flag is provided or USE_REAL_LLM environment variable is set.
 """
 
 import os
 import sys
 import json
+import argparse
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,7 +22,7 @@ from src.core.agent import AgentConfig
 from src.core.types import Message, Result
 
 
-def create_demo_agent(project_name: str = "demo_project") -> CodeExecutorAgent:
+def create_demo_agent(project_name: str = "demo_project", use_real_llm: bool = False) -> CodeExecutorAgent:
     """Create a CodeExecutorAgent for demonstration"""
     output_dir = Path("./demo_output") / project_name
     
@@ -666,14 +668,18 @@ echo "  2. npm start"
     }
 
 
-def demo_task_execution(project_name: str, task_title: str, mock_response_func):
-    """Demonstrate task execution with mocked LLM response"""
+def demo_task_execution(project_name: str, task_title: str, mock_response_func, use_real_llm: bool = False):
+    """Demonstrate task execution with mocked or real LLM response"""
     print(f"\n{'='*60}")
     print(f"🚀 Demo: {project_name}")
+    if use_real_llm:
+        print("🔗 Using real LLM via LLMAgent")
+    else:
+        print("🎭 Using mocked LLM responses")
     print(f"{'='*60}")
     
     # Create agent
-    agent = create_demo_agent(project_name.lower().replace(" ", "_"))
+    agent = create_demo_agent(project_name.lower().replace(" ", "_"), use_real_llm)
     
     # Prepare task message
     task_id = "T1"
@@ -688,15 +694,22 @@ def demo_task_execution(project_name: str, task_title: str, mock_response_func):
         }
     })
     
-    # Mock the LLM response
-    mock_response = mock_response_func()
-    
-    with patch.object(agent, '_generate_execution_plan', return_value=mock_response):
-        # Execute the task
+    if use_real_llm:
+        # Use real LLM - no mocking needed, LLMAgent handles the actual call
         print(f"📝 Task: {task_title}")
-        print("🔄 Executing task...")
+        print("🔄 Executing task with real LLM...")
         
         result = agent.run(message)
+    else:
+        # Mock the LLM response
+        mock_response = mock_response_func()
+        
+        with patch.object(agent, '_generate_execution_plan', return_value=mock_response):
+            # Execute the task
+            print(f"📝 Task: {task_title}")
+            print("🔄 Executing task...")
+            
+            result = agent.run(message)
         
         if result.success:
             print(f"✅ {result.display_output}")
@@ -724,26 +737,73 @@ def demo_task_execution(project_name: str, task_title: str, mock_response_func):
             print(f"❌ Task failed: {result.output.get('error', 'Unknown error')}")
 
 
+def parse_arguments():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(
+        description="Demo script for CodeExecutorAgent with optional real LLM integration",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python demo_code_executor.py                    # Use mocked LLM (default)
+  python demo_code_executor.py --use-real-llm     # Use real LLM via Ollama
+  USE_REAL_LLM=1 python demo_code_executor.py     # Use real LLM via env var
+        """
+    )
+    
+    parser.add_argument(
+        "--use-real-llm", 
+        action="store_true",
+        help="Use real LLM integration via LLMAgent instead of mocked responses. "
+             "Requires Ollama to be running with a compatible model."
+    )
+    
+    return parser.parse_args()
+
+
+def should_use_real_llm(args) -> bool:
+    """Determine if real LLM should be used based on CLI args and environment"""
+    # Command line flag takes precedence
+    if args.use_real_llm:
+        return True
+    
+    # Check environment variable
+    env_value = os.getenv("USE_REAL_LLM", "").lower()
+    return env_value in ("1", "true", "yes", "on")
+
+
 def main():
     """Run the demo"""
+    args = parse_arguments()
+    use_real_llm = should_use_real_llm(args)
+    
     print("🚀 CodeExecutorAgent Demo")
     print("=" * 80)
-    print("This demo shows the CodeExecutorAgent creating real files and executing code")
-    print("without requiring an Ollama connection (uses mocked LLM responses).")
+    
+    if use_real_llm:
+        print("This demo shows the CodeExecutorAgent creating real files and executing code")
+        print("using REAL LLM integration via LLMAgent (requires Ollama).")
+        print("\n⚠️  Note: Make sure Ollama is running with a compatible model before proceeding!")
+    else:
+        print("This demo shows the CodeExecutorAgent creating real files and executing code")
+        print("using mocked LLM responses (no Ollama connection required).")
+        print("\n💡 Tip: Use --use-real-llm flag or set USE_REAL_LLM=1 to test with real LLM.")
+    
     print()
     
     # Demo 1: Python Calculator
     demo_task_execution(
         "Python Calculator",
         "Create Python Calculator with Tests",
-        mock_llm_response_python_calculator
+        mock_llm_response_python_calculator,
+        use_real_llm
     )
     
     # Demo 2: React App  
     demo_task_execution(
         "React ArXiv App", 
         "Create React ArXiv Papers Browser",
-        mock_llm_response_react_app
+        mock_llm_response_react_app,
+        use_real_llm
     )
     
     print(f"\n{'='*60}")
