@@ -320,7 +320,7 @@ class CodeExecutorAgent(BaseAgent):
             
             # Security check: ensure path is within task directory
             target_path = (task_dir / file_path).resolve()
-            if not str(target_path).startswith(str(task_dir)):
+            if not target_path.is_relative_to(task_dir.resolve()):
                 return {
                     "action": "file_creation",
                     "success": False,
