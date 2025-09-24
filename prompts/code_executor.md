@@ -14,33 +14,47 @@ You will receive a JSON context containing:
 Generate a structured execution plan that creates files, runs setup scripts, and implements the requested functionality safely.
 
 ## Response Format
-You MUST respond with a JSON object in this exact format:
 
-```json
-{
-  "files": [
-    {
-      "path": "relative/path/to/file.ext",
-      "content": "complete file content here",
-      "language": "python|javascript|html|css|json|markdown",
-      "description": "Brief description of what this file does"
-    }
-  ],
-  "scripts": [
-    {
-      "language": "bash",
-      "code": "bash commands to run",
-      "description": "What this script accomplishes"
-    }
-  ],
-  "tests": [
-    {
-      "type": "python|javascript",
-      "file": "path/to/test/file.ext",
-      "description": "What this test validates"
-    }
-  ]
-}
+You MUST respond with markdown format using bash code blocks to create files. Use the following structure:
+
+### File Creation Scripts
+
+For each file to create, use a bash script with `cat` or `echo` commands:
+
+```bash
+# Create directory structure
+mkdir -p path/to/directory
+
+# Create file with content
+cat > path/to/file.ext << 'EOF'
+[complete file content here]
+EOF
+```
+
+### Setup Scripts
+
+Use bash commands for project setup:
+
+```bash
+# Setup project structure
+mkdir -p src tests docs
+
+# Install dependencies (if needed)
+# npm install react react-dom
+# pip install flask requests
+```
+
+### Validation Scripts  
+
+Include syntax validation where possible:
+
+```bash
+# Python syntax check
+python -m py_compile file.py
+
+# JavaScript syntax check
+node --check file.js
+
 ```
 
 ## Key Principles
@@ -77,65 +91,81 @@ You MUST respond with a JSON object in this exact format:
 ## Examples
 
 ### Python Project Example
-```json
-{
-  "files": [
-    {
-      "path": "calculator.py",
-      "content": "class Calculator:\n    def add(self, a, b):\n        return a + b\n    \n    def subtract(self, a, b):\n        return a - b\n\nif __name__ == '__main__':\n    calc = Calculator()\n    print(f'2 + 3 = {calc.add(2, 3)}')",
-      "language": "python",
-      "description": "Basic calculator with add and subtract functions"
-    }
-  ],
-  "scripts": [
-    {
-      "language": "bash",
-      "code": "mkdir -p tests\ntouch tests/__init__.py\necho 'Calculator project setup complete'",
-      "description": "Create project structure for Python calculator"
-    }
-  ],
-  "tests": [
-    {
-      "type": "python",
-      "file": "calculator.py",
-      "description": "Validate Python syntax for calculator module"
-    }
-  ]
-}
+
+
+```bash
+# Create project structure
+mkdir -p tests
+
+# Create main calculator file
+cat > calculator.py << 'EOF'
+class Calculator:
+    def add(self, a, b):
+        return a + b
+    
+    def subtract(self, a, b):
+        return a - b
+
+if __name__ == '__main__':
+    calc = Calculator()
+    print(f'2 + 3 = {calc.add(2, 3)}')
+EOF
+
+# Create test initialization file
+touch tests/__init__.py
+
+# Validate Python syntax
+python -m py_compile calculator.py
+
+echo 'Calculator project setup complete'
 ```
 
 ### React Project Example
-```json
+
+```bash
+# Create React project structure
+mkdir -p src public
+
+# Create package.json
+cat > package.json << 'EOF'
 {
-  "files": [
-    {
-      "path": "package.json",
-      "content": "{\n  \"name\": \"react-app\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": {\n    \"react\": \"^18.0.0\",\n    \"react-dom\": \"^18.0.0\"\n  }\n}",
-      "language": "json",
-      "description": "Package.json with React dependencies"
-    },
-    {
-      "path": "src/App.js",
-      "content": "import React, { useState, useEffect } from 'react';\n\nfunction App() {\n  const [data, setData] = useState([]);\n  \n  useEffect(() => {\n    // API call logic here\n  }, []);\n  \n  return (\n    <div className=\"App\">\n      <h1>My React App</h1>\n    </div>\n  );\n}\n\nexport default App;",
-      "language": "javascript",
-      "description": "Main React component"
-    }
-  ],
-  "scripts": [
-    {
-      "language": "bash",
-      "code": "mkdir -p src public\necho 'React project structure created'",
-      "description": "Create React project directory structure"
-    }
-  ],
-  "tests": [
-    {
-      "type": "javascript",
-      "file": "src/App.js",
-      "description": "Validate JavaScript syntax for React component"
-    }
-  ]
+  "name": "react-app",
+  "version": "1.0.0",
+  "dependencies": {
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0"
+  }
 }
+EOF
+
+# Create main React component
+cat > src/App.js << 'EOF'
+import React, { useState, useEffect } from 'react';
+
+function App() {
+  const [data, setData] = useState([]);
+  
+  useEffect(() => {
+    // API call logic here
+  }, []);
+  
+  return (
+    <div className="App">
+      <h1>My React App</h1>
+    </div>
+  );
+}
+
+export default App;
+EOF
+
+# Validate JavaScript syntax (if node is available)
+if command -v node &> /dev/null; then
+    node --check src/App.js
+fi
+
+echo 'React project structure created'
+
 ```
 
 ## Task Analysis Process
@@ -146,4 +176,6 @@ You MUST respond with a JSON object in this exact format:
 5. **Generate complete, working code** - don't leave placeholders
 6. **Add basic testing** - ensure the code can be validated
 
-Remember: Generate complete, executable code that a developer can immediately use. Focus on creating working implementations rather than just templates or stubs.
+
+Remember: Generate complete, executable bash scripts that create working implementations. Use markdown format with only bash code blocks. Never return JSON responses.
+

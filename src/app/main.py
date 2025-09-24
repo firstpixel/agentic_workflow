@@ -672,10 +672,12 @@ def main():
     demo_display_unwrap()
     demo_flows_sample()
     demo_planner()
-    demo_planner_coder()
+
+    demo_planner_coder_integration()
 
 
-def demo_planner_coder():
+def demo_planner_coder_integration():
+
     """
     Demonstrate the CodeExecutorAgent with PlannerFlow
     Creates actual files and executes code based on planning

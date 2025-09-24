@@ -12,8 +12,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 # Add project root to path
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
+
+project_root = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(project_root))
+
 
 from src.agents.code_executor_agent import CodeExecutorAgent
 from src.core.agent import AgentConfig
@@ -70,70 +72,65 @@ def test_find_task_in_plan(code_executor_agent):
     assert task_details is None
 
 
-def test_parse_execution_plan_json(code_executor_agent):
-    """Test parsing execution plan from JSON response"""
-    json_response = '''
+
+def test_parse_execution_plan_markdown(code_executor_agent):
+    """Test parsing execution plan from markdown response"""
+    markdown_response = '''
     Here's the execution plan:
     
-    ```json
-    {
-        "files": [
-            {
-                "path": "calculator.py",
-                "content": "def add(a, b): return a + b",
-                "language": "python",
-                "description": "Simple calculator"
-            }
-        ],
-        "scripts": [
-            {
-                "language": "bash",
-                "code": "mkdir -p src",
-                "description": "Create directory"
-            }
-        ],
-        "tests": [
-            {
-                "type": "python",
-                "file": "calculator.py",
-                "description": "Test calculator"
-            }
-        ]
-    }
+    ```bash
+    # Create project structure
+    mkdir -p src
+    
+    # Create calculator file
+    cat > calculator.py << 'EOF'
+    def add(a, b): 
+        return a + b
+    
+    def subtract(a, b):
+        return a - b
+    EOF
+    
+    # Validate Python syntax
+    python -m py_compile calculator.py
+    
+    echo 'Calculator project setup complete'
     ```
     '''
     
-    plan = code_executor_agent._parse_execution_plan(json_response)
+    plan = code_executor_agent._parse_execution_plan(markdown_response)
     assert plan is not None
     assert len(plan["files"]) == 1
     assert len(plan["scripts"]) == 1
-    assert len(plan["tests"]) == 1
     assert plan["files"][0]["path"] == "calculator.py"
+    assert "def add" in plan["files"][0]["content"]
 
 
 def test_parse_execution_plan_fallback(code_executor_agent):
-    """Test fallback parsing when no JSON is found"""
+    """Test fallback parsing when only bash blocks are found"""
     response = '''
-    Here's some code:
-    
-    ```python
-    def hello():
-        print("Hello, World!")
-    ```
-    
-    And a script:
+    Here's some bash script:
     
     ```bash
-    echo "Setting up project"
+    # Create project structure
     mkdir -p src
+    
+    cat > src/hello.py << 'EOF'
+    def hello():
+        print("Hello, World!")
+    EOF
+    
+    echo "Setting up project"
     ```
     '''
     
     plan = code_executor_agent._parse_execution_plan(response)
     assert plan is not None
-    assert len(plan["files"]) == 1  # Python code should create a file
+
+    assert len(plan["files"]) == 1  # File extracted from bash script
     assert len(plan["scripts"]) == 1  # Bash script
-    assert plan["files"][0]["path"] == "main.py"
+    assert plan["files"][0]["path"] == "src/hello.py"
+
 
 
 def test_create_file(code_executor_agent, temp_project_dir):

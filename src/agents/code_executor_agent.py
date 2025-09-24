@@ -12,6 +12,9 @@ from __future__ import annotations
 import os
 import subprocess
 import tempfile
+
+import shlex
+
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 import json
@@ -156,43 +159,55 @@ class CodeExecutorAgent(BaseAgent):
             return None
     
     def _parse_execution_plan(self, llm_response: str) -> Optional[Dict[str, Any]]:
-        """Parse LLM response into structured execution plan"""
+
+        """Parse LLM markdown response with bash code blocks into execution plan"""
         try:
-            # Look for JSON in the response
-            json_pattern = re.compile(r'```json\s*\n(.*?)\n\s*```', re.DOTALL)
-            match = json_pattern.search(llm_response)
-            
-            if match:
-                return json.loads(match.group(1))
-            
-            # Fallback: simple parsing of code blocks
             plan = {
                 "files": [],
                 "scripts": [],
                 "tests": []
             }
             
-            # Extract code blocks
-            code_blocks = re.findall(r'```(\w+)?\s*\n(.*?)\n\s*```', llm_response, re.DOTALL)
+
+            # Extract bash code blocks
+            bash_blocks = re.findall(r'```bash\s*\n(.*?)\n\s*```', llm_response, re.DOTALL)
             
-            for lang, code in code_blocks:
-                if lang in ["bash", "sh"]:
-                    plan["scripts"].append({
-                        "language": "bash",
-                        "code": code.strip(),
-                        "description": "Bash script"
+            for bash_code in bash_blocks:
+                bash_code = bash_code.strip()
+                if not bash_code:
+                    continue
+                    
+                # Parse file creation commands from bash
+                files_in_script = self._extract_files_from_bash(bash_code)
+                plan["files"].extend(files_in_script)
+                
+                # Add the entire bash script
+                plan["scripts"].append({
+                    "language": "bash",
+                    "code": bash_code,
+                    "description": "Setup and file creation script"
+                })
+            
+            # Look for validation commands that suggest testing
+            if re.search(r'python.*-m.*py_compile', llm_response):
+                # Find python files for testing
+                python_files = [f for f in plan["files"] if f["path"].endswith(".py")]
+                for py_file in python_files:
+                    plan["tests"].append({
+                        "type": "python",
+                        "file": py_file["path"],
+                        "description": f"Validate Python syntax for {py_file['path']}"
                     })
-                elif lang in ["python", "py"]:
-                    plan["files"].append({
-                        "path": "main.py",
-                        "content": code.strip(),
-                        "language": "python"
-                    })
-                elif lang in ["javascript", "js"]:
-                    plan["files"].append({
-                        "path": "index.js", 
-                        "content": code.strip(),
-                        "language": "javascript"
+            
+            if re.search(r'node.*--check', llm_response):
+                # Find JavaScript files for testing
+                js_files = [f for f in plan["files"] if f["path"].endswith((".js", ".jsx"))]
+                for js_file in js_files:
+                    plan["tests"].append({
+                        "type": "javascript",
+                        "file": js_file["path"],
+                        "description": f"Validate JavaScript syntax for {js_file['path']}"
+
                     })
             
             return plan if (plan["files"] or plan["scripts"]) else None
@@ -201,6 +216,59 @@ class CodeExecutorAgent(BaseAgent):
             print(f"❌ Exception parsing execution plan: {e}")
             return None
     
+
+    def _extract_files_from_bash(self, bash_code: str) -> List[Dict[str, Any]]:
+        """Extract file creation commands from bash script"""
+        files = []
+        
+        # Pattern to match "cat > filename << 'EOF'" constructs
+        cat_patterns = re.findall(
+            r'cat\s*>\s*([^\s<]+)\s*<<\s*[\'"]?(\w+)[\'"]?\s*\n(.*?)\n\2',
+            bash_code,
+            re.DOTALL | re.MULTILINE
+        )
+        
+        for filepath, delimiter, content in cat_patterns:
+            # Determine language from extension
+            language = "text"
+            if filepath.endswith(".py"):
+                language = "python"
+            elif filepath.endswith((".js", ".jsx")):
+                language = "javascript"
+            elif filepath.endswith(".html"):
+                language = "html"
+            elif filepath.endswith(".css"):
+                language = "css"
+            elif filepath.endswith(".json"):
+                language = "json"
+            elif filepath.endswith(".md"):
+                language = "markdown"
+            
+            files.append({
+                "path": filepath.strip(),
+                "content": content.strip(),
+                "language": language,
+                "description": f"Generated {language} file"
+            })
+        
+        # Also look for simple echo commands
+        echo_patterns = re.findall(
+            r'echo\s+[\'"]([^\'"]*)[\'"].*>\s*([^\s&;|]+)',
+            bash_code
+        )
+        
+        for content, filepath in echo_patterns:
+            if not any(f["path"] == filepath.strip() for f in files):  # Avoid duplicates
+                files.append({
+                    "path": filepath.strip(),
+                    "content": content,
+                    "language": "text",
+                    "description": "Simple file creation"
+                })
+        
+        return files
+    
+
     def _execute_plan(self, plan: Dict[str, Any], task_id: str) -> List[Dict[str, Any]]:
         """Execute the generated plan"""
         results = []
@@ -255,13 +323,17 @@ class CodeExecutorAgent(BaseAgent):
             # Create temporary script file
             with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
                 f.write("#!/bin/bash\n")
-                f.write(f"cd {task_dir}\n")  # Ensure we're in the task directory
+
+                f.write(f"cd {shlex.quote(str(task_dir))}\n")  # Safely escape the task directory path
+
                 f.write(code)
                 script_path = f.name
             
             try:
-                # Make script executable
-                os.chmod(script_path, 0o755)
+
+                # Make script executable (owner only for security)
+                os.chmod(script_path, 0o700)
+
                 
                 # Execute script
                 result = subprocess.run(
@@ -320,13 +392,24 @@ class CodeExecutorAgent(BaseAgent):
             
             # Security check: ensure path is within task directory
             target_path = (task_dir / file_path).resolve()
-            if not target_path.is_relative_to(task_dir.resolve()):
-                return {
-                    "action": "file_creation",
-                    "success": False,
-                    "message": f"Path {file_path} outside allowed directory"
-                }
-            
+
+            try:
+                # Use more robust path validation (Python 3.9+)
+                if not target_path.is_relative_to(task_dir.resolve()):
+                    return {
+                        "action": "file_creation",
+                        "success": False,
+                        "message": f"Path {file_path} outside allowed directory"
+                    }
+            except AttributeError:
+                # Fallback for Python < 3.9
+                if not str(target_path).startswith(str(task_dir.resolve())):
+                    return {
+                        "action": "file_creation",
+                        "success": False,
+                        "message": f"Path {file_path} outside allowed directory"
+                    }
+
             # Check file extension
             if target_path.suffix not in self.allowed_extensions:
                 return {
