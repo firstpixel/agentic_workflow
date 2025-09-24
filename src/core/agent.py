@@ -13,6 +13,7 @@ except ImportError:
 
 from .utils import to_display
 from .types import Message, Result
+from ..config.settings import Settings
 
 
 # --------- Config --------------------------
@@ -97,8 +98,18 @@ class LLMAgent(BaseAgent):
         if not OLLAMA_AVAILABLE:
             raise ImportError("ollama package not available. Install with: pip install ollama")
 
-        # 1) System prompt
-        system_prompt = _load_system_prompt_from_config(self.config)
+        # 1) System prompt with template substitution
+        system_prompt_template = _load_system_prompt_from_config(self.config)
+        
+        # Perform template substitution using message data
+        system_prompt = system_prompt_template
+        if isinstance(message.data, dict):
+            # Substitute any template variables like {contexts_md}, {plan_md}, etc.
+            for key, value in message.data.items():
+                if key != "user_prompt" and key != "history" and isinstance(value, str):
+                    placeholder = "{" + key + "}"
+                    if placeholder in system_prompt:
+                        system_prompt = system_prompt.replace(placeholder, value)
 
         # 2) Extract user_prompt + history
         if not isinstance(message.data, dict):
@@ -131,11 +142,12 @@ class LLMAgent(BaseAgent):
 
         # 4) Model + options
         model_cfg = self.config.model_config or {}
-        model = model_cfg.get("model", "llama3.2:latest")
+        settings = Settings()
+        model = model_cfg.get("model", settings.ollama_model)
         OPT_KEYS = ("temperature", "top_p", "frequency_penalty", "presence_penalty", "num_ctx")
         options = {k: model_cfg[k] for k in OPT_KEYS if k in model_cfg}
-
-        client = ollama.Client(host="http://192.168.1.151:11434")
+        
+        client = ollama.Client(host=settings.ollama_host)
         # 5) Call Ollama (no streaming)
         response = client.chat(
             model=model,

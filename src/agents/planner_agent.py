@@ -315,7 +315,7 @@ class PlannerAgent(BaseAgent):
             pass
 
         final_plan_md = md_merger.strip()
-        print(f"\n🏁 [DEBUG] Final plan prepared - ALREADY PRINTED ABOVE")
+        print(f"\n🏁 [DEBUG] Final plan prepared")
         
         plan_meta = {
             "executor_agent": executor_agent,

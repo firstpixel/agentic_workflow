@@ -51,7 +51,7 @@ class Settings:
     @classmethod
     def load(cls) -> "Settings":
         return cls(
-            ollama_host=os.environ.get("OLLAMA_HOST", "http://localhost:11434"),
+            ollama_host=os.environ.get("OLLAMA_HOST", "http://192.168.1.151:11434"),
             ollama_model=os.environ.get("OLLAMA_MODEL", "llama3.2:1b"),
             ollama_simple_model=os.environ.get("OLLAMA_SIMPLE_MODEL", "llama3.2:1b"),
             ollama_standard_model=os.environ.get("OLLAMA_STANDARD_MODEL", "llama3.2:3b"),

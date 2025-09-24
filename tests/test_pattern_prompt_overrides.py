@@ -3,50 +3,28 @@ from pathlib import Path
 
 from src.core.agent import AgentConfig, LLMAgent
 from src.core.workflow_manager import WorkflowManager
-from src.agents.prompt_switcher import PromptSwitcherAgent
+from src.agents.prompt_switcher import PromptSwitcherAgent, PromptAgent
 from tests.test_utils import skip_if_no_ollama, get_test_model_config
 
 @skip_if_no_ollama()
-def test_task10_prompt_overrides_with_ollama(tmp_path, monkeypatch):
-    # Write prompts to disk (no inline prompt strings in code)
-    prompts = tmp_path / "prompts"
-    prompts.mkdir(parents=True, exist_ok=True)
-
-    (prompts / "prompt_switcher.md").write_text(
-        "You are a prompt selection assistant.\n\n"
-        "### INPUT\n{text}\n\n"
-        "### SWITCH RULES\n- If [[PARAGRAPH]] present, choose Writer → writer_paragraph.md\n\n"
-        "### OUTPUT\n"
-        "### TARGET PROMPTS\n- Writer: writer_paragraph.md\n",
-        encoding="utf-8"
-    )
-    (prompts / "writer_bullets.md").write_text(
-        "You are a senior software engineer.\n"
-        "Produce a concise technical bullet list only.\n\nINPUT:\n{message_text}\n",
-        encoding="utf-8"
-    )
-    (prompts / "writer_paragraph.md").write_text(
-        "You are a senior software engineer.\n"
-        "Produce a single concise paragraph.\n\nINPUT:\n{message_text}\n",
-        encoding="utf-8"
-    )
-
-    monkeypatch.setenv("PROMPT_DIR", str(prompts))
+def test_task10_prompt_overrides_with_ollama():
+    # Use existing prompts from workspace prompts/ folder
+    # No need to create temporary files
 
     model_config_temp0 = get_test_model_config("standard", temperature=0.0)
     model_config_temp01 = get_test_model_config("standard", temperature=0.1)
     
-    switcher = PromptSwitcherAgent(AgentConfig(
-        name="PromptSwitcher",
+    # Use PromptAgent (alias for PromptSwitcherAgent) with existing prompt_agent.md
+    switcher = PromptAgent(AgentConfig(
+        name="PromptSwitcher", 
         model_config={
-            "prompt_file": "prompt_switcher.md",
-            **model_config_temp0,
-            "default_targets": {"Writer": "writer_bullets.md"}
+            "prompt_file": "prompt_agent.md",  # Uses existing prompt from prompts/ folder
+            **model_config_temp0
         }
     ))
     writer = LLMAgent(AgentConfig(
         name="Writer",
-        prompt_file="writer_bullets.md",
+        prompt_file="writer_bullets.md",  # baseline; should be overridden to writer_paragraph.md
         model_config=model_config_temp01
     ))
 
@@ -54,8 +32,8 @@ def test_task10_prompt_overrides_with_ollama(tmp_path, monkeypatch):
     graph  = {"PromptSwitcher": ["Writer"], "Writer": []}
     wm = WorkflowManager(graph, agents)
 
-    # Trigger PARAGRAPH selection deterministically
-    user_text = {"text": "Explain the API telemetry approach. [[PARAGRAPH]]"}
+    # Use [[PARAGRAPH]] trigger to switch to writer_paragraph.md according to prompt_agent.md rules
+    user_text = {"text": "[[PARAGRAPH]] Explain the API telemetry approach."}
     results = wm.run_workflow("PromptSwitcher", user_text)
 
     # Writer should produce some text
