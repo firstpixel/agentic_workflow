@@ -672,6 +672,28 @@ def main():
     demo_display_unwrap()
     demo_flows_sample()
     demo_planner()
+    demo_planner_coder_integration()
+
+
+def demo_planner_coder_integration():
+    """
+    Demonstrate the CodeExecutorAgent with PlannerFlow
+    Creates actual files and executes code based on planning
+    """
+    print("\n🚀 Testing CodeExecutorAgent with PlannerFlow")
+    print("=" * 60)
+    
+    try:
+        from src.app.flow_planner_coder import demo_planner_coder
+        # Run a simple demo
+        demo_planner_coder(
+            "Create a Python hello world script with proper documentation",
+            "hello_world_demo"
+        )
+        print("✅ CodeExecutorAgent demo completed successfully!")
+    except Exception as e:
+        print(f"❌ CodeExecutorAgent demo failed: {e}")
+        print("Note: This demo requires the CodeExecutorAgent to be properly configured")
 
 
 def demo_eventbus_interactive():
