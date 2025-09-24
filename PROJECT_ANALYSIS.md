@@ -680,4 +680,4 @@ The Agentic Workflow Framework provides a comprehensive foundation for building 
 
 Key strengths include the flexible workflow management system, comprehensive agent implementations (especially the PlannerAgent), and the clean separation of concerns between core framework, agents, and application layers. The flow builder system makes it easy to create new workflows while maintaining the flexibility to handle complex routing and parallel processing scenarios.
 
-For future development, focus should be placed on implementing the recommended refactoring improvements, particularly around async processing, caching, and enhanced monitoring capabilities.
+For future development, focus should be placed on implementing the recommended refactoring improvements, particularly around async agent, plug and play,  caching, and enhanced monitoring capabilities.
