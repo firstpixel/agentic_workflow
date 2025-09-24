@@ -12,8 +12,6 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 # Add project root to path
-project_root = str(Path(__file__).parent.parent)
-sys.path.insert(0, project_root)
 
 from src.app.flow_planner_coder import build_planner_coder_flow
 from src.core.workflow_manager import WorkflowManager
