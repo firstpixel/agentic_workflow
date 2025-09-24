@@ -59,14 +59,18 @@ def build_planner_coder_flow(
 
     # Create CodeExecutorAgent with enhanced configuration
     executor_config = {
-        "project_root": project_root,
+        "project_root": project_root,  # This parameter takes precedence
         "enable_execution": True,
         "allowed_extensions": [
             ".py", ".js", ".ts", ".jsx", ".tsx", ".html", ".css", ".json", 
             ".md", ".txt", ".sh", ".yaml", ".yml", ".gitignore", ".env"
         ]
     }
-    executor_config.update(executor_model_config or {})
+    # Override with user-provided config, but keep project_root from parameter
+    if executor_model_config:
+        user_project_root = executor_config["project_root"]  # Save the parameter value
+        executor_config.update(executor_model_config)
+        executor_config["project_root"] = user_project_root  # Restore parameter value
     
     executor = CodeExecutorAgent(AgentConfig(
         name=executor_agent_name,
