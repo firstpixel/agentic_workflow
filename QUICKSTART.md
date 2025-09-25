@@ -34,6 +34,10 @@ docker run -d --name qdrant -p 6333:6333 qdrant/qdrant:latest
 git clone <your-repo-url>
 cd agentic_workflow
 
+# Create and activate virtual environment
+python -m venv .venv
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+
 # Install dependencies
 pip install -r requirements.txt
 # OR
@@ -83,12 +87,47 @@ print(result.output)
 ## 4. Try the Demos
 
 ```bash
+# IMPORTANT: Always activate the virtual environment first!
+source .venv/bin/activate
+
 # Run all pattern demos
 python demo_patterns.py
 
 # Run specific pattern
 python demo_patterns.py 1  # Prompt chaining
 python demo_patterns.py 2  # Routing
+
+# OR use the helper script (automatically activates .venv)
+./run_demo.sh           # All patterns
+./run_demo.sh 1         # Specific pattern
+
+# Code Executor Demo (no LLM required - uses mocked responses)
+python demo_code_executor.py
+
+# Debug and development utilities
+python debug_workflow.py
+```
+
+### Available Demos
+
+**`demo_patterns.py`** - Interactive pattern demonstrations:
+- Pattern 1: Prompt Chaining (sequential workflows)
+- Pattern 2: Routing (intelligent request distribution)  
+- Pattern 3: Parallelization (concurrent execution)
+- Pattern 4: Reflection (iterative improvement)
+- Pattern 5: Tool Use (external tool integration)
+
+**`demo_code_executor.py`** - Code generation and execution:
+- Python Calculator project
+- React Todo App generation
+- Node.js API server creation
+- Static website building
+- No LLM required (uses mocked responses)
+
+**`debug_workflow.py`** - Development utilities:
+- Workflow debugging and testing
+- Agent state inspection
+- Performance profiling
 ```
 
 ## 5. Run Tests

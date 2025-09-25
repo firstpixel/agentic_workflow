@@ -570,6 +570,61 @@ graph = {
 workflow = WorkflowManager(graph=graph, agents={...})
 ```
 
+## 🎮 Demo Scripts
+
+The framework includes several demonstration scripts to help you get started:
+
+### Pattern Demonstrations (`demo_patterns.py`)
+
+Interactive demonstrations of the 20 agentic AI design patterns:
+
+```bash
+# Run all patterns (requires Ollama)
+source .venv/bin/activate
+python demo_patterns.py
+
+# Run specific pattern
+python demo_patterns.py 1    # Prompt Chaining
+python demo_patterns.py 2    # Routing
+python demo_patterns.py 3    # Parallelization
+python demo_patterns.py 4    # Reflection
+python demo_patterns.py 5    # Tool Use
+
+# Use helper script (auto-activates .venv)
+./run_demo.sh               # All patterns
+./run_demo.sh 1            # Specific pattern
+```
+
+### Code Executor Demonstration (`demo_code_executor.py`)
+
+Demonstrates the CodeExecutorAgent without requiring Ollama by using mocked LLM responses:
+
+```bash
+# Run without LLM (uses mocked responses)
+python demo_code_executor.py
+
+# Available demonstrations:
+# 1. Python Calculator - Creates and runs a calculator program
+# 2. React Todo App - Generates a complete React application
+# 3. Node.js API Server - Creates an Express.js REST API
+# 4. Static Website - Builds an HTML/CSS/JS website
+```
+
+**Features demonstrated:**
+- **Safe Code Execution**: Sandboxed execution within project directories
+- **Multi-language Support**: Python, JavaScript, HTML/CSS, Node.js
+- **File Management**: Automatic project structure creation
+- **Security**: Path validation and execution timeouts
+- **Integration**: Works with PlannerFlow for automated development
+
+### Debug Workflow (`debug_workflow.py`)
+
+Development and debugging utilities for workflow testing:
+
+```bash
+python debug_workflow.py
+```
+
 ## 🧪 Testing
 
 The framework includes comprehensive tests for each pattern:

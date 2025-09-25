@@ -58,8 +58,9 @@ def demo_pattern_1_prompt_chaining():
     })
     
     # Execute the chain
-    message = Message(data={"user_prompt": "Create a technical article about machine learning"})
-    result = workflow.run(message)
+    input_data = {"user_prompt": "Create a technical article about machine learning"}
+    results = workflow.run_workflow("Planner", input_data)
+    result = results[-1] if results else None
     
     print(f"✅ Final result: {to_display(result)}")
     return result
@@ -104,7 +105,7 @@ def demo_pattern_2_routing():
     # Test routing
     requests = [
         "Explain quantum computing algorithms",
-        "Write a business proposal for AI adoption",
+        "Write a business proposal for AI adoption", 
         "Create a story about time travel"
     ]
     
@@ -149,8 +150,9 @@ def demo_pattern_3_parallelization():
         "Join": join
     })
     
-    message = Message(data={"text": "Artificial intelligence is transforming industries..."})
-    result = workflow.run(message)
+    input_data = {"text": "Artificial intelligence is transforming industries..."}
+    results = workflow.run_workflow("Fanout", input_data)
+    result = results[-1] if results else None
     
     print(f"✅ Parallel processing complete: {len(result.output.get('results', []))} results combined")
     return result
@@ -176,8 +178,9 @@ def demo_pattern_4_reflection():
         "Critic": critic
     })
     
-    message = Message(data={"user_prompt": "Write about the ethics of AI"})
-    result = workflow.run(message)
+    input_data = {"user_prompt": "Write about the ethics of AI"}
+    results = workflow.run_workflow("Writer", input_data)
+    result = results[-1] if results else None
     
     print(f"✅ Reflection complete after iterations: {result.metrics.get('iterations', 1)}")
     return result
@@ -187,31 +190,41 @@ def demo_pattern_5_tool_use():
     print("\n🔧 Pattern 5: Tool Use")
     print("External tool integration for specialized capabilities")
     
-    from src.agents.tool_runner import ToolRunnerAgent, ToolSpec
-    from src.tools.duckduckgo_scraper import duckduckgo_search
+    from src.agents.tool_runner import ToolRunnerAgent
     
-    # Create tool-enabled agent
-    tools = [
-        ToolSpec(
-            name="web_search",
-            description="Search the web for current information",
-            function=duckduckgo_search,
-            parameters={"query": "string", "max_results": "integer"}
-        )
-    ]
-    
+    # Create tool-enabled agent with DuckDuckGo integration
     tool_agent = ToolRunnerAgent(AgentConfig(
         name="ToolRunner",
-        tools=tools
+        model_config={
+            "mode": "deterministic", 
+            "tools": {
+                "duckduckgo": {
+                    "enabled": True,
+                    "timeout": 10,
+                    "delay": 1.0,
+                    "max_results_limit": 5,
+                    "allow_actions": ["search", "scrape", "search_and_scrape"]
+                }
+            }
+        }
     ))
     
-    message = Message(data={
-        "tool_name": "web_search",
-        "parameters": {"query": "latest AI developments 2024", "max_results": 3}
-    })
+    # Execute tool search
+    input_data = {
+        "tool": "duckduckgo.search_and_scrape",
+        "args": {"query": "latest AI developments 2024", "max_results": 3}
+    }
     
-    result = tool_agent.execute(message)
-    print(f"✅ Tool execution complete: Found {len(result.output.get('results', []))} results")
+    result = tool_agent.execute(Message(data=input_data))
+    
+    if result.success:
+        results = result.output.get('results', [])
+        print(f"✅ Tool execution complete: Found {len(results)} results")
+        for i, res in enumerate(results[:2], 1):  # Show first 2 results
+            print(f"   {i}. {res.get('title', 'No title')}")
+    else:
+        print(f"❌ Tool execution failed: {result.output}")
+    
     return result
 
 def demo_all_patterns():
