@@ -471,6 +471,10 @@ result = rag_agent.execute(message)
 
 ### Code Execution and File Creation
 
+The CodeExecutorAgent can create files and execute code automatically, with support for both mocked LLM responses (for fast development/testing) and real LLM integration.
+
+#### Using with Real LLM Integration
+
 ```python
 from src.agents.code_executor_agent import CodeExecutorAgent
 from src.app.flow_planner_coder import build_planner_coder_flow, demo_planner_coder
@@ -491,10 +495,35 @@ demo_planner_coder(
     "Create a Python calculator with tests",
     "calculator_project"
 )
-
-# Or run the demo script
-# python demo_code_executor.py
 ```
+
+#### Demo Script with Dual Mode Support
+
+The demo script supports both mocked (fast) and real LLM modes:
+
+```bash
+# Default: Use mocked LLM responses (no Ollama required)
+python demo_code_executor.py
+
+# Use real LLM via LLMAgent (requires Ollama)
+python demo_code_executor.py --use-real-llm
+
+# Or via environment variable
+USE_REAL_LLM=1 python demo_code_executor.py
+
+# Show help for all options
+python demo_code_executor.py --help
+```
+
+**Mock Mode (Default):**
+- Fast execution, perfect for development and testing
+- No external dependencies (Ollama not required)
+- Predictable, consistent outputs for CI/CD
+
+**Real LLM Mode:**
+- Uses actual LLM for dynamic code generation
+- Requires Ollama with a compatible model (e.g., llama3.2:latest)
+- Provides end-to-end validation of the CodeExecutorAgent
 
 ### Human-in-the-Loop Approval
 
